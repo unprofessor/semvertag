@@ -1,6 +1,6 @@
 # Design Plan: git-tag-derived SemVer crate
 
-Working name: `gitver` (placeholder — check crates.io availability before publishing;
+Working name: `semvertag` (placeholder — check crates.io availability before publishing;
 `git-semver` is taken by a Go tool with the same scheme, so an unrelated Rust name is safer).
 
 ## 1. Problem statement
@@ -47,19 +47,19 @@ SemVer string whose ordering matches intuition:
 Workspace with five crates, each independently useful:
 
 ```
-gitver/
+semvertag/
   crates/
-    gitver-core/      pure derivation logic, no I/O, no git dependency
-    gitver-shell/     shells out to `git describe`, minimal deps
-    gitver-git2/      optional libgit2-backed adapter (no git binary needed)
-    gitver-macros/    optional proc-macro for compile-time embedding
-    gitver-cli/       optional `cargo-gitver` binary (release-time checks, e.g. §8)
+    semvertag-core/      pure derivation logic, no I/O, no git dependency
+    semvertag-shell/     shells out to `git describe`, minimal deps
+    semvertag-git2/      optional libgit2-backed adapter (no git binary needed)
+    semvertag-macros/    optional proc-macro for compile-time embedding
+    semvertag-cli/       optional `cargo-semvertag` binary (release-time checks, e.g. §8)
   Cargo.toml           workspace root
 ```
 
-`gitver-core` is the crate to get right; the adapters are thin and low-risk.
+`semvertag-core` is the crate to get right; the adapters are thin and low-risk.
 
-### 4.1 `gitver-core`
+### 4.1 `semvertag-core`
 
 ```rust
 pub struct Describe {
@@ -83,30 +83,37 @@ pub fn derive(describe: &Describe) -> Result<semver::Version, DeriveError>;
 pub fn parse_describe_string(raw: &str) -> Result<Describe, DeriveError>;
 ```
 
-### 4.2 `gitver-shell`
+### 4.2 `semvertag-shell`
 
 Runs `git describe --tags --long --always --dirty=.dirty`, feeds the output to
-`gitver_core::parse_describe_string` + `derive`. Also checks for `.git/shallow`
+`semvertag_core::parse_describe_string` + `derive`. Also checks for `.git/shallow`
 and returns a distinct `ShallowClone` warning/error rather than silently
 returning a wrong version — this is the most common real-world failure mode
-(CI checkouts with `fetch-depth: 1`).
+(CI checkouts with `fetch-depth: 1`). The `.git/shallow` check is best-effort:
+it covers the common worktree-root case but may miss `gitdir:` pointer files,
+submodules with their own shallow state, or other layouts; a missed detection
+surfaces as a plausible-but-wrong version rather than a crash, which is
+acceptable until a real-world failure mode forces a more complete probe.
 
-### 4.3 `gitver-git2`
+### 4.3 `semvertag-git2`
 
 Same output, via `libgit2` instead of shelling out — useful for build
 environments without a `git` binary on `PATH`.
 
-### 4.4 `gitver-macros` (optional, later milestone)
+### 4.4 `semvertag-macros` (optional, later milestone)
 
 ```rust
-gitver::version!() // -> &'static str, resolved at compile time, git-version-style
+semvertag::version!() // -> &'static str, resolved at compile time, git-version-style
 ```
 
 ### 4.5 build.rs helper
 
 Documented pattern (not necessarily its own crate) for emitting
 `cargo:rustc-env=GIT_VERSION=...` and the correct `cargo:rerun-if-changed`
-directives (`.git/HEAD`, the resolved ref, `.git/index` for dirty-state).
+directives (`.git/HEAD`, the resolved ref, `.git/index` for dirty-state). This
+directive set is best-effort: it misses packed refs (`.git/packed-refs`), so a
+tag move that gets the loose ref packed won't necessarily retrigger the build.
+Acceptable until it bites in practice.
 
 ## 5. Derivation algorithm (formal)
 
@@ -118,13 +125,15 @@ Given `tag` (parsed as `semver::Version`), `commits_since: u64`, `hash: &str`, `
 3. If `commits_since > 0` and `tag.pre.is_empty()` (plain release tag):
    - bump `patch += 1`
    - `pre = "dev.{commits_since}"`
-   - `build = hash` (+ `.dirty` if dirty)
+   - `build = "g" + hash` (+ `.dirty` if dirty)
 4. If `commits_since > 0` and `!tag.pre.is_empty()` (tag is itself a prerelease):
    - major/minor/patch unchanged
    - `pre = "{tag.pre}.dev.{commits_since}"`
-   - `build = hash` (+ `.dirty` if dirty)
+   - `build = "g" + hash` (+ `.dirty` if dirty)
 
-This guarantees: `derive(count=0) == tag` exactly, and increasing `commits_since`
+The `g` prefix on the build metadata mirrors `git describe`'s own `g87af40b`
+convention; `Describe.hash` stores the bare short hash without the prefix, and
+`derive()` adds it. This guarantees: `derive(count=0) == tag` exactly, and
 for a fixed tag always increases precedence, per SemVer's prerelease-identifier
 comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 
@@ -137,7 +146,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 | Tag has a `v` prefix | Strip before parsing, note the prefix, but don't hardcode — make prefix configurable (default `"v"`, allow `""`). |
 | Tag already contains build metadata (rare, malformed) | Reject in `parse_describe_string`; ambiguous to merge two build-metadata segments correctly. |
 | Dirty worktree | Always build metadata, never prerelease — dirty/clean isn't an orderable axis, it's provenance. Known consequence: dirty and clean at the same commit compare as *equal* under strict SemVer precedence (build metadata is ignored for ordering) — document this as expected, not a bug. |
-| Shallow clone (CI `fetch-depth: 1`) | Detect `.git/shallow`, surface a distinct error/warning in `gitver-shell` rather than a silently wrong commit count. |
+| Shallow clone (CI `fetch-depth: 1`) | Detect `.git/shallow`, surface a distinct error/warning in `semvertag-shell` rather than a silently wrong commit count. |
 | Lightweight vs. annotated tags | Always invoke `git describe` with `--tags` so lightweight tags are found; document this requirement. |
 | Multiple tags on the same commit | Git's own `describe` picks one (most recent by default); out of scope for this crate to second-guess. |
 | Huge commit counts | Use `u64` for `commits_since`, not `u32`. |
@@ -155,7 +164,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 | `1.0.0` | 5 | true | `1.0.1-dev.5+g87af40b.dirty` |
 | `1.0.0-rc.1` | 0 | false | `1.0.0-rc.1` |
 | `1.0.0-rc.1` | 3 | false | `1.0.0-rc.1.dev.3+g87af40b` |
-| `0.1.0` | 1 | false | `0.2.0-dev.1+g87af40b` *(patch bump only — confirm 0.x is NOT special-cased; document explicitly since Cargo treats 0.x specially for compatibility but this crate is about ordering, not compatibility)* |
+| `0.1.0` | 1 | false | `0.1.1-dev.1+g87af40b` *(patch bump only — 0.x is NOT special-cased; document explicitly since Cargo treats 0.x specially for compatibility but this crate is about ordering, not compatibility)* |
 | `1.0.0` | 9 vs `1.0.0` at 10 | — | assert `derive(9) < derive(10)` (numeric prerelease comparison, not lexical — this is the case that motivated the whole crate) |
 | `1.0.0` | 99999999 | false | parses without overflow |
 
@@ -170,7 +179,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 | `87af40b` (no tags, `--always` fallback) | `DeriveError::NoTagsFound` or a distinct `NoTagVariant` the caller can match on |
 | `` (empty string) | `DeriveError::MalformedDescribeString` |
 | `not-even-close-to-valid` | `DeriveError::MalformedDescribeString` |
-| `v1.0.0-rc.1-3-g87af40b-4-gdeadbee` (double-describe, shouldn't occur but shouldn't panic) | parsed via rightmost split, tag becomes everything but the last two groups — assert no panic, result may be `UnparseableTag` |
+| `v1.0.0-rc.1-3-g87af40b-4-gdeadbee` (double-describe, shouldn't occur but shouldn't panic) | asserts no panic; no specific result is pinned (the input is malformed and out of contract) |
 
 ### 7.3 Property-based tests (`proptest`)
 
@@ -185,7 +194,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 
 ### 7.4 Integration tests (real git repos via `tempfile` + `git2` or shelled commands)
 
-Each spins up a throwaway repo and asserts `gitver-shell`'s end-to-end output:
+Each spins up a throwaway repo and asserts `semvertag-shell`'s end-to-end output:
 
 1. Fresh repo, one commit, annotated tag `v1.0.0` on HEAD → `1.0.0`.
 2. Same, plus 3 more commits → `1.0.1-dev.3+g<hash>` (hash format matches real
@@ -196,19 +205,19 @@ Each spins up a throwaway repo and asserts `gitver-shell`'s end-to-end output:
 6. Repo with only a **lightweight** tag (not annotated) → still found (confirms
    `--tags` flag is actually being passed).
 7. Simulated shallow clone (`git clone --depth 1` from fixture #2) →
-   `gitver-shell` returns the shallow-clone warning/error rather than a
+   `semvertag-shell` returns the shallow-clone warning/error rather than a
    plausible-looking wrong version.
 8. Two tags on the same commit → doesn't panic, accepts whichever `git describe`
    picks (documents behavior, doesn't assert a specific winner).
 
 ### 7.5 Golden/snapshot tests
 
-Table-driven, doc-tested in `gitver-core`'s docs so the examples in documentation
+Table-driven, doc-tested in `semvertag-core`'s docs so the examples in documentation
 are themselves the test cases (`cargo test --doc`):
 
 ```rust
 /// ```
-/// # use gitver_core::*;
+/// # use semvertag_core::*;
 /// let d = Describe { tag: "v2.3.1".into(), commits_since: 7, hash: "abc1234".into(), dirty: false };
 /// assert_eq!(derive(&d).unwrap().to_string(), "2.3.2-dev.7+gabc1234");
 /// ```
@@ -217,7 +226,7 @@ are themselves the test cases (`cargo test --doc`):
 ### 7.6 CI-specific regression test
 
 A GitHub Actions job that deliberately checks out with `fetch-depth: 1` and
-asserts `gitver-shell` reports the shallow-clone condition rather than a
+asserts `semvertag-shell` reports the shallow-clone condition rather than a
 silently-wrong version — this is the failure mode most likely to bite real
 users and the easiest one to regress on without a dedicated test.
 
@@ -232,10 +241,10 @@ release/tag time and shouldn't be wired into routine `cargo build`.
 
 ### 8.1 Scope
 
-- Pure function lives in `gitver-core`, alongside `derive()` — same reasoning
+- Pure function lives in `semvertag-core`, alongside `derive()` — same reasoning
   (testable without I/O or a real repo).
 - Actually invoking it (reading Cargo.toml, resolving the latest tag) is a new
-  thin CLI, not folded into `gitver-shell`'s existing build-time responsibilities.
+  thin CLI, not folded into `semvertag-shell`'s existing build-time responsibilities.
 - v1 only handles a **plain-release** latest tag. If the latest tag is itself a
   prerelease (`v1.0.0-rc.1`), return a distinct error rather than guessing —
   deciding what counts as a legal "next" version mid-RC cycle (bump the rc,
@@ -250,7 +259,7 @@ release/tag time and shouldn't be wired into routine `cargo build`.
 
 ```rust
 pub enum SuccessorError {
-    NotGreater { latest: Version, candidate: Version },
+    LessThanLatest { latest: Version, candidate: Version },
     IllegalGap { latest: Version, candidate: Version },
     LatestIsPrerelease { latest: Version }, // out of scope for v1, explicit error rather than guessing
 }
@@ -269,18 +278,29 @@ Legal `candidate` values for a plain-release `latest_release` (major.minor.patch
 - `minor + 1`, patch reset to `0`, major unchanged.
 - `major + 1`, minor and patch reset to `0`.
 
-Anything else — skipped versions, decrements, arbitrary jumps — is `IllegalGap`.
+The result is decided by precedence, not by membership in the list above:
+
+1. If `candidate < latest_release` (by `semver` ordering) — `LessThanLatest`.
+   This naturally captures prereleases of `latest_release` itself (e.g.
+   `1.2.3-rc.1` < `1.2.3`), which are lower precedence rather than illegal gaps.
+2. Else if `candidate` is not one of the legal bumps listed above — `IllegalGap`
+   (skipped versions, arbitrary jumps, decrements that aren't strictly lower, etc.).
+3. Else — `Ok`.
+
+Ordering the checks this way means a `candidate` that is a prerelease of the
+same release falls out as `LessThanLatest` without an ad-hoc exception, and the
+legal-bump list only governs the `>= latest_release` region.
 
 ### 8.3 CLI integration
 
-New crate `gitver-cli`, binary `cargo-gitver`:
+New crate `semvertag-cli`, binary `cargo-semvertag`:
 
 ```
-cargo gitver check
+cargo semvertag check
 ```
 
 - Reads `package.version` from `Cargo.toml` (workspace-member-aware).
-- Resolves the latest tag via the existing `gitver-shell` adapter.
+- Resolves the latest tag via the existing `semvertag-shell` adapter.
 - Calls `is_valid_successor`.
 - Exits non-zero with a readable diagnostic on failure. Intended for CI or a
   pre-commit/pre-tag hook, not for every `cargo build`.
@@ -296,37 +316,37 @@ cargo gitver check
 | `1.2.3` | `1.2.5` | `IllegalGap` — skipped patch |
 | `1.2.3` | `1.4.0` | `IllegalGap` — skipped minor |
 | `1.2.3` | `1.3.1` | `IllegalGap` — minor bump must reset patch to 0 |
-| `1.2.3` | `1.2.2` | `NotGreater` |
-| `1.2.3` | `1.2.3-rc.1` | `NotGreater` — lower precedence than `1.2.3` itself |
+| `1.2.3` | `1.2.2` | `LessThanLatest` |
+| `1.2.3` | `1.2.3-rc.1` | `LessThanLatest` — lower precedence than `1.2.3` itself |
 | `1.2.3-rc.1` (latest tag is itself a prerelease) | anything | `LatestIsPrerelease` — out of scope v1 |
 | `0.1.0` | `0.2.0` | Ok — confirm 0.x is *not* specially cased here either, consistent with the same open call in §5/§11 |
 
 Property tests: for any legal bump type applied programmatically to a random
 valid `Version`, `is_valid_successor` accepts it; for any candidate strictly
-less than `latest`, always `NotGreater`.
+less than `latest`, always `LessThanLatest`.
 
 ## 9. Dependencies
 
 - `semver` (dtolnay) — parsing/validation/comparison, matches Cargo's own interpretation.
-- `gitver-shell`: no extra deps beyond `std::process::Command`.
-- `gitver-git2`: `git2` crate (optional feature, not default — keeps `gitver-core`
-  and `gitver-shell` dependency-light).
-- `gitver-cli`: a TOML-parsing crate (`toml` + `cargo_toml`, or hand-rolled
+- `semvertag-shell`: no extra deps beyond `std::process::Command`.
+- `semvertag-git2`: `git2` crate (optional feature, not default — keeps `semvertag-core`
+  and `semvertag-shell` dependency-light).
+- `semvertag-cli`: a TOML-parsing crate (`toml` + `cargo_toml`, or hand-rolled
   minimal parsing of just `package.version`) and a small arg parser (`lexopt`
   or `clap`, leaning toward the lighter option given the CLI surface is tiny).
 - Dev-deps: `proptest`, `tempfile`, `assert_cmd` (for integration tests).
 
 ## 10. Milestones
 
-1. `gitver-core`: `Describe`, `derive`, `parse_describe_string`, full unit +
+1. `semvertag-core`: `Describe`, `derive`, `parse_describe_string`, full unit +
    property test suite (7.1–7.3). Publishable alone as a useful building block.
-2. `gitver-shell`: real-git integration tests (7.4), shallow-clone detection.
+2. `semvertag-shell`: real-git integration tests (7.4), shallow-clone detection.
 3. Docs pass: doc-tested examples (7.5), README with the ordering table from
    §1 as the lead example, worked build.rs snippet.
-4. `gitver-git2` adapter (optional, only if the `git` binary dependency
+4. `semvertag-git2` adapter (optional, only if the `git` binary dependency
    actually becomes a problem in practice).
-5. `gitver-macros` (optional, ergonomics-only — not required for correctness).
-6. `is_valid_successor` in `gitver-core` + `gitver-cli`'s `cargo gitver check`
+5. `semvertag-macros` (optional, ergonomics-only — not required for correctness).
+6. `is_valid_successor` in `semvertag-core` + `semvertag-cli`'s `cargo semvertag check`
    (§8) — independent of 4–5, can slot in any time after milestone 1.
 
 ## 11. Open questions
@@ -337,9 +357,9 @@ less than `latest`, always `NotGreater`.
   own left-shifted semver rules for pre-1.0 crates? Current lean: no — this
   crate is about *ordering*, not *compatibility*, so it stays out of that debate
   and always bumps patch. Worth flagging clearly in the README to avoid confusion.
-- Is `NoTagsFound` a hard error or should `gitver-core` offer an opt-in
+- Is `NoTagsFound` a hard error or should `semvertag-core` offer an opt-in
   bootstrap default (e.g. `0.0.0-dev.N`) computed from `git rev-list --count HEAD`?
-  Current lean: hard error in core, optional convenience wrapper in `gitver-shell`.
+  Current lean: hard error in core, optional convenience wrapper in `semvertag-shell`.
 - What should `is_valid_successor` (§8) actually do once the latest tag is a
   prerelease? Deferred past v1, but worth deciding before it comes up in
   practice: legal next steps mid-RC-cycle plausibly include another `rc.N`,
