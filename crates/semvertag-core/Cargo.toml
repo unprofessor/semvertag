@@ -1,0 +1,16 @@
+[package]
+name = "semvertag-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Turn `git describe`-style strings into SemVer versions with intuitive ordering"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/exfed/semvertag"
+keywords = ["semver", "git", "version", "describe"]
+categories = ["development-tools", "parser-implementations"]
+
+[dependencies]
+semver = "1"
+
+[dev-dependencies]
+proptest = "1"

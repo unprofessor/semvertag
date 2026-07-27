@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/semvertag-core"]
+resolver = "2"
