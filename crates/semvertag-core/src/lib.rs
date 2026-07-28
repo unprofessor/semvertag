@@ -256,6 +256,150 @@ fn parse_tag_version(tag: &str) -> Result<Version, semver::Error> {
     Version::parse(stripped)
 }
 
+// ----------------------------------------------------------- §8 ---------
+
+/// Errors from [`is_valid_successor`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuccessorError {
+    /// `candidate` has lower precedence than `latest_release` (e.g. a
+    /// regression, or a prerelease of `latest_release` itself such as
+    /// `1.2.3-rc.1` < `1.2.3`).
+    LessThanLatest {
+        latest: Version,
+        candidate: Version,
+    },
+    /// `candidate` is greater than or equal to `latest_release` but is not a
+    /// legal single-step bump — skipped versions, arbitrary jumps, or a bump
+    /// that doesn't reset lower fields (e.g. minor bump without resetting
+    /// patch to 0).
+    IllegalGap {
+        latest: Version,
+        candidate: Version,
+    },
+    /// `latest_release` is itself a prerelease. Deciding what counts as a legal
+    /// next version mid-RC cycle (bump the rc, finish the release, or jump
+    /// ahead) is ambiguous and out of scope for v1; see SPEC §8.1.
+    LatestIsPrerelease {
+        latest: Version,
+    },
+}
+
+impl fmt::Display for SuccessorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SuccessorError::LessThanLatest { latest, candidate } => {
+                write!(f, "{candidate} is lower than the latest tag {latest}")
+            }
+            SuccessorError::IllegalGap { latest, candidate } => {
+                write!(
+                    f,
+                    "{candidate} is not a legal single-step bump from {latest} \
+                     (legal: equal, patch+1, minor+1 with patch=0, or major+1 with minor=patch=0)"
+                )
+            }
+            SuccessorError::LatestIsPrerelease { latest } => {
+                write!(f, "latest tag {latest} is a prerelease; successor validation mid-RC is out of scope for v1")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SuccessorError {}
+
+/// Check that `candidate` is a legal next version relative to `latest_release`.
+///
+/// `latest_release` must be a plain release (no prerelease); if it is itself a
+/// prerelease, returns [`SuccessorError::LatestIsPrerelease`] rather than
+/// guessing — see SPEC §8.1.
+///
+/// A `candidate` is legal when it is one of:
+///
+/// - equal to `latest_release` (not yet bumped — fine between releases),
+/// - `patch + 1` with minor/major unchanged,
+/// - `minor + 1` with patch reset to `0` and major unchanged,
+/// - `major + 1` with minor and patch reset to `0`.
+///
+/// The result is decided by precedence (see SPEC §8.2):
+///
+/// 1. `candidate < latest_release` → [`SuccessorError::LessThanLatest`]. This
+///    naturally captures prereleases of `latest_release` itself (e.g.
+///    `1.2.3-rc.1` < `1.2.3`).
+/// 2. else, if `candidate` is not one of the legal bumps above →
+///    [`SuccessorError::IllegalGap`].
+/// 3. else → `Ok`.
+///
+/// This crate does **not** inspect commit history or diffs to judge *which*
+/// bump the changes warrant — it only validates that the bump, whatever it is,
+/// is a legal single step.
+///
+/// # Examples
+///
+/// ```
+/// # use semvertag_core::is_valid_successor;
+/// # use semver::Version;
+/// let latest = Version::new(1, 2, 3);
+/// assert!(is_valid_successor(&latest, &Version::new(1, 2, 4)).is_ok());      // patch
+/// assert!(is_valid_successor(&latest, &Version::new(1, 3, 0)).is_ok());      // minor
+/// assert!(is_valid_successor(&latest, &Version::new(2, 0, 0)).is_ok());      // major
+/// assert!(is_valid_successor(&latest, &Version::new(1, 2, 5)).is_err());     // skipped patch
+/// assert!(is_valid_successor(&latest, &Version::new(1, 2, 2)).is_err());     // regression
+/// ```
+pub fn is_valid_successor(
+    latest_release: &Version,
+    candidate: &Version,
+) -> Result<(), SuccessorError> {
+    if !latest_release.pre.is_empty() {
+        return Err(SuccessorError::LatestIsPrerelease {
+            latest: latest_release.clone(),
+        });
+    }
+
+    // 1. Precedence: a candidate strictly below latest is a regression /
+    //    lower-precedence prerelease, not an illegal gap.
+    if candidate < latest_release {
+        return Err(SuccessorError::LessThanLatest {
+            latest: latest_release.clone(),
+            candidate: candidate.clone(),
+        });
+    }
+
+    // 2. Equal is always legal ("not yet bumped").
+    if candidate == latest_release {
+        return Ok(());
+    }
+
+    // 3. candidate > latest: must be exactly one of the legal single-step bumps.
+    //    Prereleases are never legal successors of a plain release (they sort
+    //    below their own release and were caught at step 1, or below latest and
+    //    caught there; a prerelease above latest would be e.g. 1.2.3-rc.1 vs
+    //    latest 1.2.2 which is handled as IllegalGap here — it's not a plain
+    //    bump).
+    let is_legal = candidate.pre.is_empty()
+        && (
+            // patch + 1
+            (candidate.major == latest_release.major
+                && candidate.minor == latest_release.minor
+                && candidate.patch == latest_release.patch + 1)
+            // minor + 1, patch = 0
+            || (candidate.major == latest_release.major
+                && candidate.minor == latest_release.minor + 1
+                && candidate.patch == 0)
+            // major + 1, minor = 0, patch = 0
+            || (candidate.major == latest_release.major + 1
+                && candidate.minor == 0
+                && candidate.patch == 0)
+        );
+
+    if is_legal {
+        Ok(())
+    } else {
+        Err(SuccessorError::IllegalGap {
+            latest: latest_release.clone(),
+            candidate: candidate.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +570,87 @@ mod tests {
             assert!(w[0] < w[1], "{} should sort before {}", w[0], w[1]);
         }
     }
+
+    // --------------------------------------------------------------- §8.4 ----
+
+    fn v(maj: u64, min: u64, pat: u64) -> Version {
+        Version::new(maj, min, pat)
+    }
+
+    fn vp(s: &str) -> Version {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn successor_equal_is_ok() {
+        assert!(is_valid_successor(&v(1, 2, 3), &v(1, 2, 3)).is_ok());
+    }
+
+    #[test]
+    fn successor_patch_bump_ok() {
+        assert!(is_valid_successor(&v(1, 2, 3), &v(1, 2, 4)).is_ok());
+    }
+
+    #[test]
+    fn successor_minor_bump_ok() {
+        assert!(is_valid_successor(&v(1, 2, 3), &v(1, 3, 0)).is_ok());
+    }
+
+    #[test]
+    fn successor_major_bump_ok() {
+        assert!(is_valid_successor(&v(1, 2, 3), &v(2, 0, 0)).is_ok());
+    }
+
+    #[test]
+    fn successor_skipped_patch_is_illegal_gap() {
+        let err = is_valid_successor(&v(1, 2, 3), &v(1, 2, 5)).unwrap_err();
+        assert!(matches!(err, SuccessorError::IllegalGap { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn successor_skipped_minor_is_illegal_gap() {
+        let err = is_valid_successor(&v(1, 2, 3), &v(1, 4, 0)).unwrap_err();
+        assert!(matches!(err, SuccessorError::IllegalGap { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn successor_minor_bump_must_reset_patch() {
+        let err = is_valid_successor(&v(1, 2, 3), &v(1, 3, 1)).unwrap_err();
+        assert!(matches!(err, SuccessorError::IllegalGap { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn successor_regression_is_less_than_latest() {
+        let err = is_valid_successor(&v(1, 2, 3), &v(1, 2, 2)).unwrap_err();
+        assert!(matches!(err, SuccessorError::LessThanLatest { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn successor_same_release_prerelease_is_less_than_latest() {
+        let err = is_valid_successor(&v(1, 2, 3), &vp("1.2.3-rc.1")).unwrap_err();
+        assert!(matches!(err, SuccessorError::LessThanLatest { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn successor_latest_is_prerelease_errors() {
+        let err = is_valid_successor(&vp("1.2.3-rc.1"), &v(1, 2, 3)).unwrap_err();
+        assert!(matches!(err, SuccessorError::LatestIsPrerelease { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn successor_zero_x_not_special_cased() {
+        // §8.4: 0.x is not specially cased here either, consistent with §5/§11.
+        // 0.1.0 -> 0.2.0 is a minor bump (patch reset to 0) — legal.
+        assert!(is_valid_successor(&v(0, 1, 0), &v(0, 2, 0)).is_ok());
+    }
+
+    #[test]
+    fn successor_major_bump_must_reset_minor_and_patch() {
+        let err = is_valid_successor(&v(1, 2, 3), &v(2, 0, 1)).unwrap_err();
+        assert!(matches!(err, SuccessorError::IllegalGap { .. }), "{err:?}");
+        let err = is_valid_successor(&v(1, 2, 3), &v(2, 1, 0)).unwrap_err();
+        assert!(matches!(err, SuccessorError::IllegalGap { .. }), "{err:?}");
+    }
 }
 
 #[cfg(test)]
@@ -486,6 +711,32 @@ mod proptests {
             let v = derive(&Describe { tag, commits_since: n, hash: "87af40b".into(), dirty })?;
             let reparsed = semver::Version::parse(&v.to_string())?;
             prop_assert_eq!(v, reparsed);
+        }
+
+        // §8.4: any legal bump applied to a random plain-release is accepted.
+        #[test]
+        fn successor_accepts_legal_bumps(maj in 0u64..=50, min in 0u64..=50, pat in 0u64..=50) {
+            let latest = Version::new(maj, min, pat);
+            prop_assert!(is_valid_successor(&latest, &Version::new(maj, min, pat + 1)).is_ok());
+            prop_assert!(is_valid_successor(&latest, &Version::new(maj, min + 1, 0)).is_ok());
+            prop_assert!(is_valid_successor(&latest, &Version::new(maj + 1, 0, 0)).is_ok());
+            prop_assert!(is_valid_successor(&latest, &latest).is_ok());
+        }
+
+        // §8.4: any candidate strictly less than latest is LessThanLatest.
+        #[test]
+        fn successor_rejects_lower(maj in 1u64..=50, min in 0u64..=50, pat in 0u64..=50) {
+            let latest = Version::new(maj, min, pat);
+            let lower = if pat > 0 {
+                Version::new(maj, min, pat - 1)
+            } else if min > 0 {
+                Version::new(maj, min - 1, 99)
+            } else {
+                Version::new(maj - 1, 99, 99)
+            };
+            prop_assert!(lower < latest);
+            let err = is_valid_successor(&latest, &lower).unwrap_err();
+            prop_assert_eq!(err, SuccessorError::LessThanLatest { latest: latest.clone(), candidate: lower });
         }
     }
 }

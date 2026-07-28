@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/semvertag-core", "crates/semvertag-shell"]
+members = ["crates/semvertag-core", "crates/semvertag-shell", "crates/semvertag-cli"]
 resolver = "2"
