@@ -1,0 +1,20 @@
+[package]
+name = "semvertag-shell"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Shell-out adapter: derive a SemVer version from git describe"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/exfed/semvertag"
+keywords = ["semver", "git", "version", "describe"]
+categories = ["development-tools"]
+
+[dependencies]
+semvertag-core = { path = "../semvertag-core", version = "0.1.0" }
+semver = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+semvertag-core = { path = "../semvertag-core", version = "0.1.0" }
