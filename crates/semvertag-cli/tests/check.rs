@@ -90,9 +90,12 @@ fn check_equal_version_is_ok() {
     commit(&repo, "initial");
     run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
 
-    check_in(&repo).assert().success().stdout(
-        predicates::str::contains("ok: Cargo.toml version 1.2.3 is a legal successor to tag 1.2.3"),
-    );
+    check_in(&repo)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "ok: Cargo.toml version 1.2.3 is a legal successor to tag 1.2.3",
+        ));
 }
 
 #[test]
@@ -136,11 +139,10 @@ fn check_skipped_patch_is_illegal_gap() {
     commit(&repo, "initial");
     run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
 
-    check_in(&repo)
-        .assert()
-        .failure()
-        .code(1)
-        .stderr(predicates::str::contains("IllegalGap").or(predicates::str::contains("not a legal single-step bump")));
+    check_in(&repo).assert().failure().code(1).stderr(
+        predicates::str::contains("IllegalGap")
+            .or(predicates::str::contains("not a legal single-step bump")),
+    );
 }
 
 #[test]

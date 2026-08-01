@@ -79,7 +79,11 @@ fn parse_args() -> Result<Args, AppError> {
             // When invoked as `cargo semvertag check`, cargo passes `semvertag`
             // as the first arg. Skip it.
             Value(v) if command.is_none() => {
-                match v.string().map_err(|e| AppError::Other(e.to_string()))?.as_str() {
+                match v
+                    .string()
+                    .map_err(|e| AppError::Other(e.to_string()))?
+                    .as_str()
+                {
                     "semvertag" => continue,
                     "check" => command = Some(Command::Check),
                     "version" => command = Some(Command::Version),
@@ -120,11 +124,12 @@ fn check(args: &Args) -> Result<(), AppError> {
     let describe = semvertag_shell::describe_raw(Path::new("."))
         .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
 
-    let latest = parse_tag_version(&describe.tag)
-        .map_err(|e| AppError::Other(format!(
+    let latest = parse_tag_version(&describe.tag).map_err(|e| {
+        AppError::Other(format!(
             "latest tag `{}` is not a valid SemVer version: {e}",
             describe.tag
-        )))?;
+        ))
+    })?;
 
     // 2. Read package.version from Cargo.toml (workspace-aware).
     let manifest_path = args
@@ -145,12 +150,8 @@ fn check(args: &Args) -> Result<(), AppError> {
             Ok(())
         }
         Err(e @ SuccessorError::LessThanLatest { .. })
-        | Err(e @ SuccessorError::IllegalGap { .. }) => {
-            Err(AppError::CheckFailed(format!("{e}")))
-        }
-        Err(e @ SuccessorError::LatestIsPrerelease { .. }) => {
-            Err(AppError::Other(format!("{e}")))
-        }
+        | Err(e @ SuccessorError::IllegalGap { .. }) => Err(AppError::CheckFailed(format!("{e}"))),
+        Err(e @ SuccessorError::LatestIsPrerelease { .. }) => Err(AppError::Other(format!("{e}"))),
     }
 }
 

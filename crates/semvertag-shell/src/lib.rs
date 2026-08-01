@@ -29,7 +29,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use semvertag_core::{parse_describe_string, derive, Describe, DeriveError};
+use semvertag_core::{derive, parse_describe_string, DeriveError, Describe};
 
 /// Re-exported so callers don't need a direct `semver` dependency to name the
 /// return type of [`describe`] / [`describe_in`].
@@ -111,13 +111,7 @@ pub fn describe_in(repo: &Path) -> Result<semver::Version, ShellError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args([
-            "describe",
-            "--tags",
-            "--long",
-            "--always",
-            "--dirty=.dirty",
-        ])
+        .args(["describe", "--tags", "--long", "--always", "--dirty=.dirty"])
         .output()
         .map_err(|_| ShellError::GitUnavailable)?;
 
@@ -144,13 +138,7 @@ pub fn describe_raw(repo: &Path) -> Result<Describe, ShellError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args([
-            "describe",
-            "--tags",
-            "--long",
-            "--always",
-            "--dirty=.dirty",
-        ])
+        .args(["describe", "--tags", "--long", "--always", "--dirty=.dirty"])
         .output()
         .map_err(|_| ShellError::GitUnavailable)?;
 
@@ -314,10 +302,7 @@ mod tests {
         // `git describe --always` succeeds with a bare hash, which core parses
         // as NoTagsFound.
         assert!(
-            matches!(
-                err,
-                ShellError::Core(DeriveError::NoTagsFound)
-            ),
+            matches!(err, ShellError::Core(DeriveError::NoTagsFound)),
             "expected NoTagsFound, got {err:?}"
         );
     }

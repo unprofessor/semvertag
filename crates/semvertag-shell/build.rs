@@ -46,7 +46,10 @@ fn main() {
 
 /// Walk upward from `start` to find a directory containing `.git`.
 fn find_git_root(start: &Path) -> Option<PathBuf> {
-    start.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf)
+    start
+        .ancestors()
+        .find(|d| d.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 fn derive_version(manifest_dir: &Path) -> Option<String> {
@@ -61,13 +64,7 @@ fn derive_version(manifest_dir: &Path) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(&repo)
-        .args([
-            "describe",
-            "--tags",
-            "--long",
-            "--always",
-            "--dirty=.dirty",
-        ])
+        .args(["describe", "--tags", "--long", "--always", "--dirty=.dirty"])
         .output()
         .ok()?;
 

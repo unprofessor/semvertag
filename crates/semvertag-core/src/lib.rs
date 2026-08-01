@@ -71,15 +71,10 @@ pub struct Describe {
 pub enum DeriveError {
     /// The tag could not be parsed as a SemVer version (after stripping any
     /// `v`/`V` prefix).
-    UnparseableTag {
-        tag: String,
-        source: semver::Error,
-    },
+    UnparseableTag { tag: String, source: semver::Error },
     /// The raw `git describe` string did not match the expected
     /// `<tag>-<count>-g<hash>[.dirty]` shape.
-    MalformedDescribeString {
-        input: String,
-    },
+    MalformedDescribeString { input: String },
     /// No tags were found — the input looked like a bare `--always` fallback
     /// hash.
     NoTagsFound,
@@ -136,8 +131,8 @@ impl std::error::Error for DeriveError {
 /// assert_eq!(derive(&d).unwrap().to_string(), "1.0.0+dirty");
 /// ```
 pub fn derive(describe: &Describe) -> Result<Version, DeriveError> {
-    let mut version = parse_tag_version(&describe.tag)
-        .map_err(|source| DeriveError::UnparseableTag {
+    let mut version =
+        parse_tag_version(&describe.tag).map_err(|source| DeriveError::UnparseableTag {
             tag: describe.tag.clone(),
             source,
         })?;
@@ -264,24 +259,16 @@ pub enum SuccessorError {
     /// `candidate` has lower precedence than `latest_release` (e.g. a
     /// regression, or a prerelease of `latest_release` itself such as
     /// `1.2.3-rc.1` < `1.2.3`).
-    LessThanLatest {
-        latest: Version,
-        candidate: Version,
-    },
+    LessThanLatest { latest: Version, candidate: Version },
     /// `candidate` is greater than or equal to `latest_release` but is not a
     /// legal single-step bump — skipped versions, arbitrary jumps, or a bump
     /// that doesn't reset lower fields (e.g. minor bump without resetting
     /// patch to 0).
-    IllegalGap {
-        latest: Version,
-        candidate: Version,
-    },
+    IllegalGap { latest: Version, candidate: Version },
     /// `latest_release` is itself a prerelease. Deciding what counts as a legal
     /// next version mid-RC cycle (bump the rc, finish the release, or jump
     /// ahead) is ambiguous and out of scope for v1; see SPEC §8.1.
-    LatestIsPrerelease {
-        latest: Version,
-    },
+    LatestIsPrerelease { latest: Version },
 }
 
 impl fmt::Display for SuccessorError {
@@ -417,18 +404,30 @@ mod tests {
 
     #[test]
     fn release_tag_at_head() {
-        assert_eq!(derive(&describe("1.0.0", 0, "87af40b", false)).unwrap().to_string(), "1.0.0");
+        assert_eq!(
+            derive(&describe("1.0.0", 0, "87af40b", false))
+                .unwrap()
+                .to_string(),
+            "1.0.0"
+        );
     }
 
     #[test]
     fn release_tag_at_head_dirty() {
-        assert_eq!(derive(&describe("1.0.0", 0, "87af40b", true)).unwrap().to_string(), "1.0.0+dirty");
+        assert_eq!(
+            derive(&describe("1.0.0", 0, "87af40b", true))
+                .unwrap()
+                .to_string(),
+            "1.0.0+dirty"
+        );
     }
 
     #[test]
     fn release_tag_five_commits_past() {
         assert_eq!(
-            derive(&describe("1.0.0", 5, "87af40b", false)).unwrap().to_string(),
+            derive(&describe("1.0.0", 5, "87af40b", false))
+                .unwrap()
+                .to_string(),
             "1.0.1-dev.5+g87af40b"
         );
     }
@@ -436,7 +435,9 @@ mod tests {
     #[test]
     fn release_tag_five_commits_past_dirty() {
         assert_eq!(
-            derive(&describe("1.0.0", 5, "87af40b", true)).unwrap().to_string(),
+            derive(&describe("1.0.0", 5, "87af40b", true))
+                .unwrap()
+                .to_string(),
             "1.0.1-dev.5+g87af40b.dirty"
         );
     }
@@ -444,7 +445,9 @@ mod tests {
     #[test]
     fn prerelease_tag_at_head() {
         assert_eq!(
-            derive(&describe("1.0.0-rc.1", 0, "87af40b", false)).unwrap().to_string(),
+            derive(&describe("1.0.0-rc.1", 0, "87af40b", false))
+                .unwrap()
+                .to_string(),
             "1.0.0-rc.1"
         );
     }
@@ -452,7 +455,9 @@ mod tests {
     #[test]
     fn prerelease_tag_three_commits_past() {
         assert_eq!(
-            derive(&describe("1.0.0-rc.1", 3, "87af40b", false)).unwrap().to_string(),
+            derive(&describe("1.0.0-rc.1", 3, "87af40b", false))
+                .unwrap()
+                .to_string(),
             "1.0.0-rc.1.dev.3+g87af40b"
         );
     }
@@ -461,7 +466,9 @@ mod tests {
     fn zero_x_is_not_special_cased() {
         // §5/§11: always bump patch, even for 0.x.
         assert_eq!(
-            derive(&describe("0.1.0", 1, "87af40b", false)).unwrap().to_string(),
+            derive(&describe("0.1.0", 1, "87af40b", false))
+                .unwrap()
+                .to_string(),
             "0.1.1-dev.1+g87af40b"
         );
     }
@@ -483,7 +490,9 @@ mod tests {
     #[test]
     fn v_prefix_is_stripped() {
         assert_eq!(
-            derive(&describe("v1.0.0", 5, "87af40b", false)).unwrap().to_string(),
+            derive(&describe("v1.0.0", 5, "87af40b", false))
+                .unwrap()
+                .to_string(),
             "1.0.1-dev.5+g87af40b"
         );
     }
@@ -499,10 +508,7 @@ mod tests {
     #[test]
     fn parse_release_tag_at_head() {
         let d = parse_describe_string("v1.0.0-0-g87af40b").unwrap();
-        assert_eq!(
-            d,
-            describe("v1.0.0", 0, "87af40b", false)
-        );
+        assert_eq!(d, describe("v1.0.0", 0, "87af40b", false));
     }
 
     #[test]
@@ -536,13 +542,19 @@ mod tests {
     #[test]
     fn parse_empty_is_malformed() {
         let err = parse_describe_string("").unwrap_err();
-        assert!(matches!(err, DeriveError::MalformedDescribeString { .. }), "{err:?}");
+        assert!(
+            matches!(err, DeriveError::MalformedDescribeString { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn parse_garbage_is_malformed() {
         let err = parse_describe_string("not-even-close-to-valid").unwrap_err();
-        assert!(matches!(err, DeriveError::MalformedDescribeString { .. }), "{err:?}");
+        assert!(
+            matches!(err, DeriveError::MalformedDescribeString { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -622,19 +634,28 @@ mod tests {
     #[test]
     fn successor_regression_is_less_than_latest() {
         let err = is_valid_successor(&v(1, 2, 3), &v(1, 2, 2)).unwrap_err();
-        assert!(matches!(err, SuccessorError::LessThanLatest { .. }), "{err:?}");
+        assert!(
+            matches!(err, SuccessorError::LessThanLatest { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn successor_same_release_prerelease_is_less_than_latest() {
         let err = is_valid_successor(&v(1, 2, 3), &vp("1.2.3-rc.1")).unwrap_err();
-        assert!(matches!(err, SuccessorError::LessThanLatest { .. }), "{err:?}");
+        assert!(
+            matches!(err, SuccessorError::LessThanLatest { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn successor_latest_is_prerelease_errors() {
         let err = is_valid_successor(&vp("1.2.3-rc.1"), &v(1, 2, 3)).unwrap_err();
-        assert!(matches!(err, SuccessorError::LatestIsPrerelease { .. }), "{err:?}");
+        assert!(
+            matches!(err, SuccessorError::LatestIsPrerelease { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
