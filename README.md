@@ -1,37 +1,55 @@
 # semvertag
 
-Turn `git describe`-style strings into SemVer versions whose ordering matches intuition.
+[![crates.io](https://img.shields.io/crates/v/semvertag-core?label=semvertag-core)](https://crates.io/crates/semvertag-core)
+[![docs.rs](https://img.shields.io/docsrs/semvertag-core)](https://docs.rs/semvertag-core)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](./LICENSE-MIT)
 
-`git describe --tags` produces strings like `v1.0.0-5-g87af40b`. Treated naively as a SemVer string, the `-5-g87af40b` suffix parses as a *prerelease* identifier, which makes a commit 5 past `v1.0.0` sort **before** `v1.0.0` — the opposite of what you want. This crate rewrites such strings so that increasing commit count always increases precedence.
+**Embed your git version at build time — and have it sort correctly.**
 
-## The ordering
+---
 
-This is the whole point, as a test case:
+The problem: you want your Rust binary to know its own version. The obvious answer is `git describe --tags`, which produces strings like `v1.0.0-5-g87af40b`. But if you feed that to a SemVer parser, the `-5-g87af40b` suffix gets treated as a *prerelease* identifier — which means a build 5 commits past `v1.0.0` sorts **before** `v1.0.0`. That's backwards. Your users see `1.0.0` as the "latest" even when they're running something older.
+
+`semvertag` rewrites `git describe` output into proper SemVer strings where every commit forward is a version forward:
 
 ```text
 0.9.9 < 1.0.0-rc.1 < 1.0.0-rc.1.dev.3 < 1.0.0-rc.2 < 1.0.0 < 1.0.1-dev.5 < 1.0.1
 ```
 
-Reading left to right:
+In other words: **monotonic ordering from git history**. Releases sort above release candidates, RCs sort above dev snapshots, and every dev build knows exactly where it sits on the timeline.
 
-| `git describe --long` output   | derived version             | why                              |
-|--------------------------------|------------------------------|----------------------------------|
-| `0.9.0-0-gabc1234`             | `0.9.0`                      | exact tag (`-0-` means 0 commits past it) |
-| `v1.0.0-rc.1-0-gabc1234`       | `1.0.0-rc.1`                 | prerelease tag at HEAD           |
-| `v1.0.0-rc.1-3-g87af40b`       | `1.0.0-rc.1.dev.3+g87af40b`  | 3 commits past the rc, appended as `.dev.N` |
-| `v1.0.0-rc.2-0-gabc1234`       | `1.0.0-rc.2`                 | next rc, higher precedence       |
-| `v1.0.0-0-gabc1234`            | `1.0.0`                      | plain release beats any rc       |
-| `v1.0.0-5-g87af40b`            | `1.0.1-dev.5+g87af40b`       | 5 past release → patch bump + dev prerelease |
-| `v1.0.1-0-gabc1234`            | `1.0.1`                      | the release those dev builds led to |
+## How it works
 
-The key rules (formally in [SPEC.md §5](SPEC.md#5-derivation-algorithm-formal)):
+| `git describe --long` output   | derived version             | what's happening                          |
+|--------------------------------|------------------------------|-------------------------------------------|
+| `0.9.0-0-gabc1234`             | `0.9.0`                      | tagged release at HEAD → unchanged        |
+| `v1.0.0-rc.1-0-gabc1234`       | `1.0.0-rc.1`                 | prerelease tag at HEAD → unchanged        |
+| `v1.0.0-rc.1-3-g87af40b`       | `1.0.0-rc.1.dev.3+g87af40b`  | 3 commits past an RC → `.dev.3` appended  |
+| `v1.0.0-rc.2-0-gabc1234`       | `1.0.0-rc.2`                 | later RC sorts above earlier one          |
+| `v1.0.0-0-gabc1234`            | `1.0.0`                      | plain release beats any RC                |
+| `v1.0.0-5-g87af40b`            | `1.0.1-dev.5+g87af40b`       | 5 past release → patch bump + dev marker  |
+| `v1.0.1-0-gabc1234`            | `1.0.1`                      | that release the dev builds led to        |
 
-1. **Tag at HEAD, clean** → the tag unchanged.
-2. **Tag at HEAD, dirty** → tag with `+dirty` build metadata.
-3. **Commits past a plain release** → bump patch, prerelease `dev.{N}`, build `g{hash}`.
-4. **Commits past a prerelease tag** → keep the version, append `.dev.{N}` to the existing prerelease, build `g{hash}`.
+The derivation rules (see [SPEC.md §5](SPEC.md#5-derivation-algorithm-formal) for the formal spec):
 
-Dirty state is always build metadata (`+dirty`), never a prerelease — dirty/clean isn't an orderable axis, it's provenance. A dirty build and a clean build at the same commit compare as **equal** under strict SemVer precedence (build metadata is ignored for ordering). This is expected, not a bug.
+1. **Tag at HEAD, clean** → the tag as-is.
+2. **Tag at HEAD, dirty** → tag with `+dirty` build metadata (not a prerelease — dirty/clean is provenance, not ordering).
+3. **Commits past a plain release** → bump patch, mark as `dev.{N}` prerelease, attach `g{hash}` build metadata.
+4. **Commits past a prerelease tag** → keep the version, append `.dev.{N}` to the existing prerelease, attach `g{hash}` build metadata.
+
+A dirty build and a clean build at the same commit compare as **equal** under strict SemVer (build metadata is ignored for precedence). This is intentional — you can't meaningfully order "built on someone's dirty laptop" against "built in CI."
+
+## When to use semvertag
+
+- **Build-time version embedding** — stamp your binary with a SemVer-compatible version derived from git, so `--version` always tells the truth.
+- **CI and release pipelines** — every build has a unique, ordered version; tooling can tell an RC from a dev snapshot from a release.
+- **Pre-release workflows** — if you ship release candidates (`v1.0.0-rc.1`, `-rc.2`, …), `semvertag` preserves prerelease ordering while still letting commits after an RC sort correctly.
+- **`cargo semvertag check` in your tagging hook** — validate that `Cargo.toml`'s version is a legal bump from the latest git tag before you tag.
+
+## When *not* to use it
+
+- You need a full release-automation tool (tagging, changelog generation, publishing). `semvertag` is one piece of the puzzle, not the whole pipeline.
+- You want Cargo-style left-shifted semver for 0.x versions. `semvertag` treats `0.x` the same as `1.x` — it's about ordering, not compatibility semantics.
 
 ## Crates
 
@@ -41,13 +59,40 @@ Dirty state is always build metadata (`+dirty`), never a prerelease — dirty/cl
 | `semvertag-shell`  | Shells out to `git describe`, feeds core.            | core + `semver` |
 | `semvertag-cli`    | `cargo semvertag check` — validate `Cargo.toml` version against the latest tag. | core + shell + `toml` + `lexopt` |
 
-`semvertag-core` is publishable and useful on its own — if you already invoke `git describe` yourself (or use a library), feed it a `Describe` and call `derive()`.
+`semvertag-core` is the heart of it — feed it a `Describe` struct and call `derive()`. It's zero-I/O, fully testable, and useful even if you already call `git describe` yourself (or use `git2`).
 
 ## Quick start
 
-### Embed your version at build time
+### Embed your version with `semvertag-shell`
 
-This is the canonical `build.rs` pattern (also documented in [SPEC §4.5](SPEC.md#45-buildrs-helper)). Add `semvertag-core` as a **build-dependency** (not a regular dependency — you don't want it in your runtime dep tree just for version embedding), invoke `git describe` yourself, and feed the output to `derive()`:
+This is the easy path — one dependency, five lines of `build.rs`:
+
+```toml
+# Cargo.toml
+[build-dependencies]
+semvertag-shell = "0.1"
+```
+
+```rust,no_run
+// build.rs
+fn main() {
+    let version = semvertag_shell::describe()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "0.0.0-unknown".to_string());
+    println!("cargo:rustc-env=SEMVERTAG_VERSION={version}");
+}
+```
+
+```rust,no_run
+// src/lib.rs — now your crate exposes a compile-time version constant
+pub const VERSION: &str = env!("SEMVERTAG_VERSION");
+```
+
+`describe()` runs `git describe --tags --long --always --dirty=.dirty` in the current directory, detects shallow clones (the most common CI gotcha), and returns a parsed `semver::Version`. Use `describe_in(repo)` or `describe_raw(repo)` when you need more control.
+
+### Manual `git` invocation (escape hatch)
+
+If your crate *is* `semvertag-core` (or depends on it at runtime), using `semvertag-shell` in `build-dependencies` creates a cycle — shell depends on core, and your crate would depend on shell at build time while core depends on your crate at runtime. In that case, use `semvertag-core` directly and invoke `git` yourself:
 
 ```toml
 # Cargo.toml
@@ -84,38 +129,11 @@ fn derive_version() -> Option<String> {
 }
 ```
 
-```rust,no_run
-// src/lib.rs
-pub const VERSION: &str = env!("SEMVERTAG_VERSION");
-```
+The inline `Command::new("git")` approach is ~15 lines and avoids the cycle entirely. Most projects won't need this — it only matters when your crate is part of the `semvertag` workspace itself or transitively depends on `semvertag-core` at runtime.
 
-> **Why not depend on `semvertag-shell` in build.rs?** You can — it handles the shallow-clone check, the no-tags fallback, and the `git` invocation for you. But `semvertag-shell` depends on `semvertag-core`, and if your crate *is* `semvertag-core` (or depends on it at runtime), Cargo rejects the cyclic build-dependency. The inlined `git describe` call above is ~15 lines and avoids the cycle entirely. For external consumers, `semvertag-shell` in `build-dependencies` is the ergonomic choice.
+### Validate `Cargo.toml` before you tag
 
-### Let `semvertag-shell` do the git work
-
-If you don't have the cyclic-dependency problem, `semvertag-shell` handles everything:
-
-```toml
-# Cargo.toml
-[build-dependencies]
-semvertag-shell = "0.1"
-```
-
-```rust,no_run
-// build.rs
-fn main() {
-    let version = semvertag_shell::describe()
-        .map(|v| v.to_string())
-        .unwrap_or_else(|_| "0.0.0-unknown".to_string());
-    println!("cargo:rustc-env=SEMVERTAG_VERSION={version}");
-}
-```
-
-`describe()` runs `git describe --tags --long --always --dirty=.dirty` in the current directory, detects shallow clones (the most common CI failure mode), and returns a parsed `semver::Version`. Use `describe_in(repo)` or `describe_raw(repo)` for more control.
-
-### Validate your `Cargo.toml` version before tagging
-
-`cargo-semvertag` checks that `package.version` in `Cargo.toml` is a legal single-step bump from the latest git tag — catches "tagged v0.3.0 but forgot to bump Cargo.toml" or an accidental skip:
+Ever tagged `v0.3.0` only to realize `Cargo.toml` still says `0.2.0`? `cargo-semvertag` catches that:
 
 ```sh
 $ cargo install cargo-semvertag
@@ -123,29 +141,31 @@ $ cargo semvertag check
 ok: Cargo.toml version 1.2.4 is a legal successor to tag 1.2.3
 ```
 
-Exit codes: `0` ok, `1` check failed (regression or illegal gap), `2` operational error (no git, no tags, unreadable `Cargo.toml`). Wire it into a pre-tag hook or CI, not every `cargo build` — it's a release-time check, not a build-time one (see [SPEC §8](SPEC.md#8-optional-cargotoml-successor-validation)).
-
-A version is a legal successor when it is one of:
+A version is legal when it's one of:
 
 - equal to the latest tag (not yet bumped — fine between releases),
 - patch + 1,
-- minor + 1 with patch reset to 0,
-- major + 1 with minor and patch reset to 0.
+- minor + 1 (patch reset to 0),
+- major + 1 (minor and patch reset to 0).
 
-Anything else is either a regression (`LessThanLatest`) or an illegal jump (`IllegalGap`). If the latest tag is itself a prerelease, the check errors out rather than guessing — deciding what's legal mid-RC-cycle is out of scope for v1.
+Anything else is either a regression or an illegal jump. If the latest tag is itself a prerelease, the check bails out rather than guessing — deciding what's legal mid-RC is outside v1 scope.
 
-## Tag prefix
+Exit codes: `0` ok, `1` check failed, `2` operational error (no git, no tags, unreadable `Cargo.toml`). Wire this into a pre-tag hook or CI — it's a release-time check, not something you run on every build (see [SPEC §8](SPEC.md#8-optional-cargotoml-successor-validation)).
 
-A leading `v` or `V` is stripped from tags before parsing (`v1.0.0` → `1.0.0`). This handles the common convention without configuration; exotic prefixes can be stripped by the caller before constructing a `Describe`.
+## Design notes
 
-## 0.x is not special-cased
+### Tag prefix
 
-This crate is about *ordering*, not *compatibility*. It does not apply Cargo's left-shifted semver rules for pre-1.0 crates — `0.1.0` → `0.2.0` is a minor bump (patch reset to 0), same as `1.1.0` → `1.2.0`. If you want different bump semantics for 0.x, validate that in your own release tooling; `semvertag` just makes the ordering monotonic.
+A leading `v` or `V` is stripped from tags (`v1.0.0` → `1.0.0`). This covers the common convention without configuration. If you use an exotic prefix, strip it yourself before constructing a `Describe`.
 
-## Shallow clones
+### 0.x versions
 
-CI checkouts with `fetch-depth: 1` are the most common real-world failure mode: `git describe` runs but reports a commit count of 0 and the bare HEAD hash, producing a plausible-looking but **wrong** version. `semvertag-shell` detects a `.git/shallow` file and returns `ShellError::ShallowClone` instead of a silently incorrect result. The check is best-effort — it covers the common worktree-root case but may miss `gitdir:` pointer files or submodules. A missed detection surfaces as a wrong version, not a crash, which is acceptable until a real-world failure forces a more complete probe.
+`semvertag` treats 0.x the same as any other major version — `0.1.0` → `0.2.0` is a minor bump, just like `1.1.0` → `1.2.0`. It does *not* apply Cargo's left-shifted semver rules for pre-1.0 crates. The crate is about ordering, not compatibility promises. If you need different bump semantics for 0.x, enforce that in your own release tooling.
+
+### Shallow clones
+
+The most common real-world failure: CI checks out with `fetch-depth: 1`, `git describe` reports a commit count of 0, and you ship a binary that thinks it's a tagged release when it isn't. `semvertag-shell` detects a `.git/shallow` file and returns `ShellError::ShallowClone` instead of a silently wrong version. The check is best-effort — it covers the common worktree-root case but may miss `gitdir:` pointer files or submodules. A missed detection means a wrong version, not a crash.
 
 ## License
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0, at your option.
