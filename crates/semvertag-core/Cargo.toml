@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.74"
 description = "Turn `git describe`-style strings into SemVer versions with intuitive ordering"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/exfed/semvertag"
+repository = "https://github.com/unprofessor/semvertag"
 keywords = ["semver", "git", "version", "describe"]
 categories = ["development-tools", "parser-implementations"]
 

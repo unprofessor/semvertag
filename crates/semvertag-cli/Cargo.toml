@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.74"
 description = "cargo-semvertag: validate Cargo.toml version against the latest git tag"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/exfed/semvertag"
+repository = "https://github.com/unprofessor/semvertag"
 keywords = ["semver", "git", "version", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
