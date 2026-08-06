@@ -57,7 +57,7 @@ A dirty build and a clean build at the same commit compare as **equal** under st
 |--------------------|-------------------------------------------------------|---------------|
 | `semvertag-core`   | Pure derivation logic. No I/O.                        | `semver`      |
 | `semvertag-shell`  | Shells out to `git describe`, feeds core.            | core + `semver` |
-| `semvertag-cli`    | `cargo semvertag check` — validate `Cargo.toml` version against the latest tag. | core + shell + `toml` + `lexopt` |
+| `semvertag-cli`    | `cargo semvertag` — print the git-derived version; `cargo semvertag check` — validate `Cargo.toml` version against the latest tag. | core + shell + `toml` + `clap` |
 
 `semvertag-core` is the heart of it — feed it a `Describe` struct and call `derive()`. It's zero-I/O, fully testable, and useful even if you already call `git describe` yourself (or use `git2`).
 
@@ -143,14 +143,23 @@ ok: Cargo.toml version 1.2.4 is a legal successor to tag 1.2.3
 
 A version is legal when it's one of:
 
-- equal to the latest tag (not yet bumped — fine between releases),
+- equal to the latest tag, but only at the tagged release commit itself — the manifest must match the tag there,
 - patch + 1,
 - minor + 1 (patch reset to 0),
 - major + 1 (minor and patch reset to 0).
 
-Anything else is either a regression or an illegal jump. If the latest tag is itself a prerelease, the check bails out rather than guessing — deciding what's legal mid-RC is outside v1 scope.
+The strict equality rule enforces bump-on-first-commit discipline: the first
+commit after a release must already carry the next version, so an untagged
+commit never reports a version equal to a released one. Anything else is either
+a regression or an illegal jump. If the latest tag is itself a prerelease, the
+check bails out rather than guessing — deciding what's legal mid-RC is outside
+v1 scope.
 
 Exit codes: `0` ok, `1` check failed, `2` operational error (no git, no tags, unreadable `Cargo.toml`). Wire this into a pre-tag hook or CI — it's a release-time check, not something you run on every build (see [SPEC §8](SPEC.md#8-optional-cargotoml-successor-validation)).
+
+Bare `cargo semvertag` (no subcommand) prints the version derived from `git`
+`describe` instead — the same value `semvertag-core`'s `derive()` computes, e.g.
+`1.2.4-dev.3+g87af40b`. `--version` prints the tool's own version.
 
 ## Design notes
 

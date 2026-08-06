@@ -3,7 +3,7 @@ name = "semvertag-cli"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
-description = "cargo-semvertag: validate Cargo.toml version against the latest git tag"
+description = "cargo-semvertag: print the git-derived SemVer version, or validate Cargo.toml against the latest tag"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/unprofessor/semvertag"
 keywords = ["semver", "git", "version", "cli"]
@@ -18,7 +18,7 @@ semvertag-core = { path = "../semvertag-core", version = "0.1.0" }
 semvertag-shell = { path = "../semvertag-shell", version = "0.1.0" }
 semver = "1"
 toml = "0.8"
-lexopt = "0.3"
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 assert_cmd = "2"

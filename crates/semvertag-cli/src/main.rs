@@ -1,29 +1,62 @@
-//! `cargo-semvertag`: validate that `Cargo.toml`'s `package.version` is a legal
-//! next step from the latest git tag.
+//! `cargo-semvertag`: git-tag-derived SemVer tooling.
 //!
-//! Invoked as `cargo semvertag check` (cargo subcommand) or
-//! `cargo-semvertag check` (standalone). Intended for CI or a pre-tag hook, not
-//! for every `cargo build` — see SPEC §8.
+//! Invoked as `cargo semvertag` (cargo subcommand) or `cargo-semvertag`
+//! (standalone).
 //!
-//! # What it checks
+//! # Commands
 //!
-//! Given the latest git tag (e.g. `v1.2.3`) and the `package.version` in
-//! `Cargo.toml`, it verifies the Cargo.toml version is a legal single-step
-//! bump: equal, patch+1, minor+1 (patch=0), or major+1 (minor=patch=0). See
-//! [`semvertag_core::is_valid_successor`].
+//! - *(default)* `cargo semvertag` — print the version derived from `git
+//!   describe` (the result of [`semvertag_core::derive`], e.g.
+//!   `1.2.4-dev.3+g87af40b`). Handy for build scripts and version embedding.
+//! - `cargo semvertag derive` — same, explicitly.
+//! - `cargo semvertag check` — validate that `Cargo.toml`'s `package.version`
+//!   is legal for the current commit: equal to the latest tag at the tagged
+//!   release commit itself, or a legal single-step bump (patch+1, minor+1 with
+//!   patch=0, or major+1 with minor=patch=0) on any commit after it. Intended
+//!   for CI or a pre-tag hook, not for every `cargo build` — see SPEC §8 and
+//!   [`semvertag_core::is_valid_successor`].
+//!
+//! `--version` / `-V` prints the `cargo-semvertag` version (standard CLI
+//! semantics).
 //!
 //! # Exit codes
 //!
-//! - `0` — the version is a legal successor (or equal).
-//! - `1` — the version is not a legal successor (`LessThanLatest` or `IllegalGap`).
+//! - `0` — success.
+//! - `1` — `check` failed: the version is not legal (`LessThanLatest`,
+//!   `NotBumped`, `TagManifestMismatch`, or `IllegalGap`).
 //! - `2` — an error occurred (no git, no tags, unreadable Cargo.toml, etc.).
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use clap::{Parser, Subcommand};
 use semver::Version;
-use semvertag_core::{is_valid_successor, SuccessorError};
-use semvertag_shell::VERSION;
+use semvertag_core::{derive, is_valid_successor, SuccessorError};
+use semvertag_shell::describe_raw;
+
+#[derive(Parser)]
+#[command(
+    name = "cargo-semvertag",
+    version,
+    about = "Print the SemVer version derived from git tags (default), or validate Cargo.toml against the latest tag (`check`)"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print the version derived from git describe (the default command).
+    Derive,
+    /// Validate Cargo.toml's package.version against the latest git tag.
+    Check {
+        /// Path to the Cargo.toml to check.
+        #[arg(long, value_name = "PATH")]
+        manifest_path: Option<PathBuf>,
+    },
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -46,82 +79,33 @@ enum AppError {
 }
 
 fn run() -> Result<(), AppError> {
-    let args = parse_args()?;
-    match args.command {
-        Command::Check => check(&args),
-        Command::Version => {
-            println!("cargo-semvertag {VERSION}");
-            Ok(())
-        }
+    // `cargo semvertag ...` passes the subcommand name as the first argument;
+    // strip it so `cargo semvertag` and `cargo-semvertag` behave identically.
+    let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == "semvertag") {
+        args.remove(0);
+    }
+    // clap's parse_from expects argv[0] (the program name) as the first item.
+    let cli = Cli::parse_from(std::iter::once(OsString::from("cargo-semvertag")).chain(args));
+    match cli.command {
+        None | Some(Command::Derive) => print_derived_version(),
+        Some(Command::Check { manifest_path }) => check(manifest_path),
     }
 }
 
-struct Args {
-    command: Command,
-    manifest: Option<PathBuf>,
+/// Print the version derived from `git describe` (SPEC §5).
+fn print_derived_version() -> Result<(), AppError> {
+    let describe = describe_raw(Path::new("."))
+        .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
+    let version =
+        derive(&describe).map_err(|e| AppError::Other(format!("could not derive version: {e}")))?;
+    println!("{version}");
+    Ok(())
 }
 
-enum Command {
-    Check,
-    Version,
-}
-
-fn parse_args() -> Result<Args, AppError> {
-    use lexopt::prelude::*;
-
-    let mut parser = lexopt::Parser::from_env();
-
-    let mut command = None;
-    let mut manifest = None;
-
-    while let Some(arg) = parser.next().map_err(|e| AppError::Other(e.to_string()))? {
-        match arg {
-            // When invoked as `cargo semvertag check`, cargo passes `semvertag`
-            // as the first arg. Skip it.
-            Value(v) if command.is_none() => {
-                match v
-                    .string()
-                    .map_err(|e| AppError::Other(e.to_string()))?
-                    .as_str()
-                {
-                    "semvertag" => continue,
-                    "check" => command = Some(Command::Check),
-                    "version" => command = Some(Command::Version),
-                    other => {
-                        return Err(AppError::Other(format!(
-                            "unknown subcommand `{other}`; expected `check` or `version`"
-                        )));
-                    }
-                }
-            }
-            Long("manifest-path") => {
-                let val = parser
-                    .value()
-                    .map_err(|e| AppError::Other(e.to_string()))?
-                    .string()
-                    .map_err(|e| AppError::Other(e.to_string()))?;
-                manifest = Some(PathBuf::from(val));
-            }
-            Long("version") => {
-                command = Some(Command::Version);
-            }
-            Long(name) => {
-                return Err(AppError::Other(format!("unknown option --{name}")));
-            }
-            Short('V') => {
-                command = Some(Command::Version);
-            }
-            _ => return Err(AppError::Other("unexpected argument".to_string())),
-        }
-    }
-
-    let command = command.unwrap_or(Command::Check);
-    Ok(Args { command, manifest })
-}
-
-fn check(args: &Args) -> Result<(), AppError> {
+fn check(manifest_path: Option<PathBuf>) -> Result<(), AppError> {
     // 1. Resolve the latest tag via the shell adapter.
-    let describe = semvertag_shell::describe_raw(Path::new("."))
+    let describe = describe_raw(Path::new("."))
         .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
 
     let latest = parse_tag_version(&describe.tag).map_err(|e| {
@@ -132,16 +116,15 @@ fn check(args: &Args) -> Result<(), AppError> {
     })?;
 
     // 2. Read package.version from Cargo.toml (workspace-aware).
-    let manifest_path = args
-        .manifest
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("Cargo.toml"));
+    let manifest_path = manifest_path.unwrap_or_else(|| PathBuf::from("Cargo.toml"));
 
     let cargo_version = read_package_version(&manifest_path)
         .map_err(|e| AppError::Other(format!("could not read {}: {e}", manifest_path.display())))?;
 
-    // 3. Validate.
-    match is_valid_successor(&latest, &cargo_version) {
+    // 3. Validate: equality with the latest tag is legal only at the tagged
+    //    release commit itself; every commit after it must already carry the
+    //    next version.
+    match is_valid_successor(&latest, &cargo_version, describe.commits_since) {
         Ok(()) => {
             println!(
                 "ok: Cargo.toml version {} is a legal successor to tag {}",
@@ -150,6 +133,8 @@ fn check(args: &Args) -> Result<(), AppError> {
             Ok(())
         }
         Err(e @ SuccessorError::LessThanLatest { .. })
+        | Err(e @ SuccessorError::NotBumped { .. })
+        | Err(e @ SuccessorError::TagManifestMismatch { .. })
         | Err(e @ SuccessorError::IllegalGap { .. }) => Err(AppError::CheckFailed(format!("{e}"))),
         Err(e @ SuccessorError::LatestIsPrerelease { .. }) => Err(AppError::Other(format!("{e}"))),
     }

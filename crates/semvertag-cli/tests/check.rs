@@ -84,6 +84,7 @@ macro_rules! skip_if_no_git {
 
 #[test]
 fn check_equal_version_is_ok() {
+    // At the tagged release commit itself, equality is the only legal state.
     skip_if_no_git!();
     let (_dir, repo) = fresh_repo();
     write_cargo_toml(&repo, "1.2.3");
@@ -102,9 +103,12 @@ fn check_equal_version_is_ok() {
 fn check_patch_bump_is_ok() {
     skip_if_no_git!();
     let (_dir, repo) = fresh_repo();
-    write_cargo_toml(&repo, "1.2.4");
+    write_cargo_toml(&repo, "1.2.3");
     commit(&repo, "initial");
     run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    // The bump must land on the first commit after the tag.
+    write_cargo_toml(&repo, "1.2.4");
+    commit(&repo, "bump patch");
 
     check_in(&repo).assert().success();
 }
@@ -113,9 +117,11 @@ fn check_patch_bump_is_ok() {
 fn check_minor_bump_is_ok() {
     skip_if_no_git!();
     let (_dir, repo) = fresh_repo();
-    write_cargo_toml(&repo, "1.3.0");
+    write_cargo_toml(&repo, "1.2.3");
     commit(&repo, "initial");
     run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    write_cargo_toml(&repo, "1.3.0");
+    commit(&repo, "bump minor");
 
     check_in(&repo).assert().success();
 }
@@ -124,9 +130,11 @@ fn check_minor_bump_is_ok() {
 fn check_major_bump_is_ok() {
     skip_if_no_git!();
     let (_dir, repo) = fresh_repo();
-    write_cargo_toml(&repo, "2.0.0");
+    write_cargo_toml(&repo, "1.2.3");
     commit(&repo, "initial");
     run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    write_cargo_toml(&repo, "2.0.0");
+    commit(&repo, "bump major");
 
     check_in(&repo).assert().success();
 }
@@ -135,9 +143,11 @@ fn check_major_bump_is_ok() {
 fn check_skipped_patch_is_illegal_gap() {
     skip_if_no_git!();
     let (_dir, repo) = fresh_repo();
-    write_cargo_toml(&repo, "1.2.5");
+    write_cargo_toml(&repo, "1.2.3");
     commit(&repo, "initial");
     run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    write_cargo_toml(&repo, "1.2.5");
+    commit(&repo, "bump too far");
 
     check_in(&repo).assert().failure().code(1).stderr(
         predicates::str::contains("IllegalGap")
@@ -158,6 +168,42 @@ fn check_regression_is_less_than_latest() {
         .failure()
         .code(1)
         .stderr(predicates::str::contains("lower than the latest tag"));
+}
+
+#[test]
+fn check_equal_version_off_tag_is_not_bumped() {
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_cargo_toml(&repo, "1.2.3");
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    commit(&repo, "dev without bumping"); // must bump on the first commit after a release
+
+    check_in(&repo)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "bump the manifest version on the first commit after a release",
+        ));
+}
+
+#[test]
+fn check_bump_at_tagged_commit_is_mismatch() {
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_cargo_toml(&repo, "1.2.4");
+    commit(&repo, "initial");
+    // The tag must match the manifest at the release commit.
+    run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+
+    check_in(&repo)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "the manifest version must equal the tag at the release commit",
+        ));
 }
 
 #[test]
@@ -194,8 +240,59 @@ fn version_flag_prints_version() {
     skip_if_no_git!();
     AssertCommand::cargo_bin("cargo-semvertag")
         .unwrap()
-        .arg("version")
+        .arg("--version")
         .assert()
         .success()
         .stdout(predicates::str::starts_with("cargo-semvertag "));
+}
+
+#[test]
+fn derive_is_default() {
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    commit(&repo, "dev");
+
+    // Bare invocation (no subcommand) prints the derived version.
+    AssertCommand::cargo_bin("cargo-semvertag")
+        .unwrap()
+        .current_dir(&repo)
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("1.2.4-dev.1+g"));
+}
+
+#[test]
+fn derive_subcommand_prints_version() {
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    commit(&repo, "dev");
+
+    AssertCommand::cargo_bin("cargo-semvertag")
+        .unwrap()
+        .arg("derive")
+        .current_dir(&repo)
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("1.2.4-dev.1+g"));
+}
+
+#[test]
+fn derive_at_tag_prints_tag_version() {
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+
+    // On the tagged commit, derive() == tag exactly.
+    AssertCommand::cargo_bin("cargo-semvertag")
+        .unwrap()
+        .arg("derive")
+        .current_dir(&repo)
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("1.2.3"));
 }

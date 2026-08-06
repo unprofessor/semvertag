@@ -20,6 +20,7 @@ SemVer string whose ordering matches intuition:
 ## 2. Goals / non-goals
 
 **Goals**
+
 - Deterministic, monotonic version derivation from git tag + commit-count + hash.
 - Pure core logic with zero I/O — testable without a git repo.
 - Thin adapters for actually invoking git (shell and/or `git2`).
@@ -27,6 +28,7 @@ SemVer string whose ordering matches intuition:
 - Reusable across projects (crates.io-published, not vendored).
 
 **Non-goals**
+
 - Not a release-automation tool (no tagging, no changelog generation, no publishing).
 - Not a general SemVer *parser* — delegate to `semver` (dtolnay) for parsing/validation.
 - No opinion on *how* you pick the next version number when there's no prerelease
@@ -140,7 +142,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 ## 6. Edge cases and design decisions
 
 | Case | Decision |
-|---|---|
+| --- | --- |
 | No tags in repo at all | `DeriveError::NoTagsFound`; caller decides fallback (e.g. `0.0.0-dev.N`) — crate does not silently invent a base version. |
 | Tag doesn't parse as SemVer (`release-2021-01`) | `DeriveError::UnparseableTag`. Recommend `git describe --match 'v[0-9]*'` at the adapter level to avoid ever seeing these. |
 | Tag has a `v` prefix | Strip before parsing, note the prefix, but don't hardcode — make prefix configurable (default `"v"`, allow `""`). |
@@ -157,7 +159,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 ### 7.1 Unit tests — `derive()` (pure, table-driven)
 
 | tag | commits_since | dirty | expected |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `1.0.0` | 0 | false | `1.0.0` |
 | `1.0.0` | 0 | true | `1.0.0+dirty` |
 | `1.0.0` | 5 | false | `1.0.1-dev.5+g87af40b` |
@@ -171,7 +173,7 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 ### 7.2 Unit tests — `parse_describe_string()`
 
 | input | expected |
-|---|---|
+| --- | --- |
 | `v1.0.0-0-g87af40b` | `Describe { tag: "v1.0.0", commits_since: 0, hash: "87af40b", dirty: false }` |
 | `v1.0.0-5-g87af40b` | `commits_since: 5` |
 | `v1.0.0-rc.1-3-g87af40b` | `tag: "v1.0.0-rc.1"` — regression test for parsing from the right, since a naive first-hyphen split would misparse this |
@@ -234,7 +236,8 @@ users and the easiest one to regress on without a dedicated test.
 
 A separate, optional feature: check that `Cargo.toml`'s `package.version` is a
 legal next step from the latest tag — catches "tagged v0.3.0 but forgot to bump
-Cargo.toml" or an accidental skip/misfire on the bump. Kept out of the `derive()`
+Cargo.toml", an accidental skip/misfire on the bump, and a manifest left
+sitting on the released version after the release. Kept out of the `derive()`
 path deliberately: `derive()` runs on every build and answers "what version am
 I"; this answers "did someone bump correctly," which only matters at
 release/tag time and shouldn't be wired into routine `cargo build`.
@@ -250,6 +253,12 @@ release/tag time and shouldn't be wired into routine `cargo build`.
   deciding what counts as a legal "next" version mid-RC cycle (bump the rc,
   finish the release, or jump ahead) is genuinely ambiguous and deserves its
   own design pass rather than a guess baked in now.
+- Deliberately strict about *when* the bump lands: equality with the latest tag
+  is valid only at the tagged release commit itself — the first commit after a
+  release must already carry the next version (the invariants this buys are
+  spelled out in §8.2). This is a workflow opinion in a way §2's non-goals are
+  not; it is the price of guaranteeing that no untagged commit ever reports a
+  released version.
 - Explicitly does **not** inspect commit history or diffs to judge *which*
   bump the changes actually warrant (that's breaking-change detection —
   `cargo-semver-checks` / `cargo-smart-release` territory, out of scope here).
@@ -260,70 +269,99 @@ release/tag time and shouldn't be wired into routine `cargo build`.
 ```rust
 pub enum SuccessorError {
     LessThanLatest { latest: Version, candidate: Version },
+    NotBumped { latest: Version, candidate: Version, commits_since: u64 },
+    TagManifestMismatch { latest: Version, candidate: Version },
     IllegalGap { latest: Version, candidate: Version },
     LatestIsPrerelease { latest: Version }, // out of scope for v1, explicit error rather than guessing
 }
 
 /// `latest_release` must have an empty `pre` field (see LatestIsPrerelease above).
+/// `commits_since` is 0 iff HEAD is the tagged release commit itself.
 pub fn is_valid_successor(
     latest_release: &Version,
     candidate: &Version,
+    commits_since: u64,
 ) -> Result<(), SuccessorError>;
 ```
 
 Legal `candidate` values for a plain-release `latest_release` (major.minor.patch, no prerelease):
 
-- equal to `latest_release` — valid; not yet bumped is fine between releases.
-- `patch + 1`, minor/major unchanged.
-- `minor + 1`, patch reset to `0`, major unchanged.
-- `major + 1`, minor and patch reset to `0`.
+- at the tagged release commit (`commits_since == 0`): equal to `latest_release` — the manifest must match the tag exactly there, or the published artifact would diverge from the tag.
+- on any other commit: `patch + 1` (minor/major unchanged), `minor + 1` (patch reset to `0`, major unchanged), or `major + 1` (minor and patch reset to `0`).
+
+This is deliberately stricter than "equal is fine between releases": it
+enforces bump-on-first-commit discipline, so the first commit after a release
+tag must carry the next version. In exchange it buys two invariants:
+
+- **No untagged commit ever reports a released version.** An untagged commit's
+  manifest is always a version that has not been published yet, so a
+  git-dependency pin can never collide with (or be mistaken for) a published
+  release.
+- **The manifest stays consistent with `derive()`.** `manifest >= derive(HEAD)`
+  everywhere, with equality exactly at the tagged commit. The lenient rule
+  allowed a commit to claim `1.2.3` in `Cargo.toml` while `derive()` reported
+  `1.2.4-dev.1` for the same commit — two answers to "what version is this".
 
 The result is decided by precedence, not by membership in the list above:
 
 1. If `candidate < latest_release` (by `semver` ordering) — `LessThanLatest`.
    This naturally captures prereleases of `latest_release` itself (e.g.
-   `1.2.3-rc.1` < `1.2.3`), which are lower precedence rather than illegal gaps.
-2. Else if `candidate` is not one of the legal bumps listed above — `IllegalGap`
+   `1.2.3-rc.1` < `1.2.3`), which are lower precedence rather than illegal gaps,
+   and it also catches "tagged v1.2.3 but the manifest still says 1.2.2" at the
+   tag commit.
+2. Else if `commits_since == 0` and `candidate != latest_release` —
+   `TagManifestMismatch`. At the release commit only equality is meaningful,
+   so this is judged before bump legality.
+3. Else if `candidate == latest_release` — `NotBumped` (off the tag, the
+   manifest must already be bumped).
+4. Else if `candidate` is not one of the legal bumps listed above — `IllegalGap`
    (skipped versions, arbitrary jumps, decrements that aren't strictly lower, etc.).
-3. Else — `Ok`.
+5. Else — `Ok`.
 
 Ordering the checks this way means a `candidate` that is a prerelease of the
-same release falls out as `LessThanLatest` without an ad-hoc exception, and the
-legal-bump list only governs the `>= latest_release` region.
+same release falls out as `LessThanLatest` without an ad-hoc exception, the
+tag-commit state is judged by equality alone, and the legal-bump list only
+governs the `> latest_release`, off-tag region.
 
 ### 8.3 CLI integration
 
-New crate `semvertag-cli`, binary `cargo-semvertag`:
+New crate `semvertag-cli`, binary `cargo-semvertag`, argument parsing via
+`clap`:
 
-```
-cargo semvertag check
-```
-
-- Reads `package.version` from `Cargo.toml` (workspace-member-aware).
-- Resolves the latest tag via the existing `semvertag-shell` adapter.
-- Calls `is_valid_successor`.
-- Exits non-zero with a readable diagnostic on failure. Intended for CI or a
-  pre-commit/pre-tag hook, not for every `cargo build`.
+- `cargo semvertag` (default) / `cargo semvertag derive` — print the version
+  derived from `git describe` (`derive()`, §5). Handy in build scripts.
+- `cargo semvertag check` — the validator:
+  - Reads `package.version` from `Cargo.toml` (workspace-member-aware).
+  - Resolves the latest tag via the existing `semvertag-shell` adapter and
+    passes the tag's commit distance to `is_valid_successor` (`0` when HEAD is
+    the tagged release commit itself).
+  - Exits non-zero with a readable diagnostic on failure. Intended for CI or a
+    pre-commit/pre-tag hook, not for every `cargo build`.
+- `cargo-semvertag --version` / `-V` — print the tool's own version (standard
+  CLI semantics; there is no `version` subcommand).
 
 ### 8.4 Test cases
 
-| latest tag | Cargo.toml version | expected |
-|---|---|---|
-| `1.2.3` | `1.2.3` | Ok — not yet bumped |
-| `1.2.3` | `1.2.4` | Ok — patch bump |
-| `1.2.3` | `1.3.0` | Ok — minor bump |
-| `1.2.3` | `2.0.0` | Ok — major bump |
-| `1.2.3` | `1.2.5` | `IllegalGap` — skipped patch |
-| `1.2.3` | `1.4.0` | `IllegalGap` — skipped minor |
-| `1.2.3` | `1.3.1` | `IllegalGap` — minor bump must reset patch to 0 |
-| `1.2.3` | `1.2.2` | `LessThanLatest` |
-| `1.2.3` | `1.2.3-rc.1` | `LessThanLatest` — lower precedence than `1.2.3` itself |
-| `1.2.3-rc.1` (latest tag is itself a prerelease) | anything | `LatestIsPrerelease` — out of scope v1 |
-| `0.1.0` | `0.2.0` | Ok — confirm 0.x is *not* specially cased here either, consistent with the same open call in §5/§11 |
+| latest tag | Cargo.toml version | HEAD | expected |
+| --- | --- | --- | --- |
+| `1.2.3` | `1.2.3` | on tag | Ok — the tagged release commit |
+| `1.2.3` | `1.2.3` | 1 commit past | `NotBumped` — must bump on the first commit after a release |
+| `1.2.3` | `1.2.4` | on tag | `TagManifestMismatch` — manifest must equal the tag at the release commit |
+| `1.2.3` | `1.2.4` | 1 commit past | Ok — patch bump |
+| `1.2.3` | `1.3.0` | 1 commit past | Ok — minor bump |
+| `1.2.3` | `2.0.0` | 1 commit past | Ok — major bump |
+| `1.2.3` | `1.2.5` | 1 commit past | `IllegalGap` — skipped patch |
+| `1.2.3` | `1.4.0` | 1 commit past | `IllegalGap` — skipped minor |
+| `1.2.3` | `1.3.1` | 1 commit past | `IllegalGap` — minor bump must reset patch to 0 |
+| `1.2.3` | `1.2.2` | any | `LessThanLatest` — including "tagged v1.2.3 but forgot to bump" at the tag commit |
+| `1.2.3` | `1.2.3-rc.1` | any | `LessThanLatest` — lower precedence than `1.2.3` itself |
+| `1.2.3-rc.1` (latest tag is itself a prerelease) | anything | any | `LatestIsPrerelease` — out of scope v1 |
+| `0.1.0` | `0.2.0` | 1 commit past | Ok — confirm 0.x is *not* specially cased here either, consistent with the same open call in §5/§11 |
 
 Property tests: for any legal bump type applied programmatically to a random
-valid `Version`, `is_valid_successor` accepts it; for any candidate strictly
-less than `latest`, always `LessThanLatest`.
+valid `Version`, `is_valid_successor` accepts it at an untagged commit and
+accepts equality only on the tag; for any candidate strictly less than
+`latest`, always `LessThanLatest`.
 
 ## 9. Dependencies
 
@@ -332,8 +370,8 @@ less than `latest`, always `LessThanLatest`.
 - `semvertag-git2`: `git2` crate (optional feature, not default — keeps `semvertag-core`
   and `semvertag-shell` dependency-light).
 - `semvertag-cli`: a TOML-parsing crate (`toml` + `cargo_toml`, or hand-rolled
-  minimal parsing of just `package.version`) and a small arg parser (`lexopt`
-  or `clap`, leaning toward the lighter option given the CLI surface is tiny).
+  minimal parsing of just `package.version`) and `clap` (derive feature) for
+  argument parsing.
 - Dev-deps: `proptest`, `tempfile`, `assert_cmd` (for integration tests).
 
 ## 10. Milestones
@@ -365,4 +403,3 @@ less than `latest`, always `LessThanLatest`.
   practice: legal next steps mid-RC-cycle plausibly include another `rc.N`,
   finishing the plain release, or abandoning the RC line entirely for a new
   major/minor — each is a different validation rule.
-
