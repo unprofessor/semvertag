@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Release tags only (v1.2.3). Glob dialect, not regex: `.` is literal,
+    # `[0-9]+` = one or more digits, pattern must match the whole tag, so
+    # prerelease tags like v1.2.3-rc.1 never trigger publish.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
     branches: [main]
 
@@ -10,13 +14,18 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
 
+permissions:
+  contents: read
+
 jobs:
   fmt:
     name: fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
@@ -25,8 +34,10 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           components: clippy
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -35,6 +46,37 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
       - run: cargo test --workspace
+
+  publish:
+    name: publish
+    # Only runs on release-tag pushes; fmt/clippy/test still gate on them.
+    if: github.ref_type == 'tag'
+    needs: [fmt, clippy, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # OIDC token for crates.io trusted publishing — no token secret needed.
+      # Requires a trusted publisher entry for this repo in crates.io settings.
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # No git credentials in the worktree: nothing to leak, and trusted
+          # publishing only needs the OIDC token.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      # Dependency order matters: shell needs core on crates.io, cli needs both.
+      # cargo publish blocks until each crate is visible in the index, so
+      # sequential steps are safe. A forgotten version bump fails loudly here
+      # ("crate version already uploaded").
+      - name: Publish semvertag-core
+        run: cargo publish -p semvertag-core
+      - name: Publish semvertag-shell
+        run: cargo publish -p semvertag-shell
+      - name: Publish semvertag-cli
+        run: cargo publish -p semvertag-cli
