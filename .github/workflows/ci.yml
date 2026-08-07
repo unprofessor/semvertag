@@ -78,5 +78,5 @@ jobs:
         run: cargo publish -p semvertag-core
       - name: Publish semvertag-shell
         run: cargo publish -p semvertag-shell
-      - name: Publish semvertag-cli
-        run: cargo publish -p semvertag-cli
+      - name: Publish cargo-semvertag
+        run: cargo publish -p cargo-semvertag

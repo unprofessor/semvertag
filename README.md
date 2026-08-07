@@ -8,7 +8,7 @@
 
 ---
 
-The problem: you want your Rust binary to know its own version. The obvious answer is `git describe --tags`, which produces strings like `v1.0.0-5-g87af40b`. But if you feed that to a SemVer parser, the `-5-g87af40b` suffix gets treated as a *prerelease* identifier &mdash; which means a build 5 commits past `v1.0.0` sorts **before** `v1.0.0`. That's backwards. Your users see `1.0.0` as the "latest" even when they're running something older.
+The problem: you want your Rust binary to know its own version. The obvious answer is `git describe --tags`, which produces strings like `v1.0.0-5-g87af40b`. But if you feed that to a SemVer parser, the `-5-g87af40b` suffix gets treated as a _prerelease_ identifier &mdash; which means a build 5 commits past `v1.0.0` sorts **before** `v1.0.0`. That's backwards. Your users see `1.0.0` as the "latest" even when they're running something older.
 
 `semvertag` rewrites `git describe` output into proper SemVer strings where every commit forward is a version forward:
 
@@ -46,7 +46,7 @@ A dirty build and a clean build at the same commit compare as **equal** under st
 - **Pre-release workflows** &mdash; if you ship release candidates (`v1.0.0-rc.1`, `-rc.2`, &hellip;), `semvertag` preserves prerelease ordering while still letting commits after an RC sort correctly.
 - **`cargo semvertag check` in your tagging hook** &mdash; validate that `Cargo.toml`'s version is a legal bump from the latest git tag before you tag.
 
-## When *not* to use it
+## When _not_ to use it
 
 - You need a full release-automation tool (tagging, changelog generation, publishing). `semvertag` is one piece of the puzzle, not the whole pipeline.
 - You want Cargo-style left-shifted semver for 0.x versions. `semvertag` treats `0.x` the same as `1.x` &mdash; it's about ordering, not compatibility semantics.
@@ -57,11 +57,32 @@ A dirty build and a clean build at the same commit compare as **equal** under st
 |--------------------|-------------------------------------------------------|-----------------|
 | `semvertag-core`   | Pure derivation logic. No I/O.                        | `semver`        |
 | `semvertag-shell`  | Shells out to `git describe`, feeds core.             | core + `semver` |
-| `semvertag-cli`    | `cargo semvertag` &mdash; print the git-derived version; `cargo semvertag check` &mdash; validate `Cargo.toml` version against the latest tag. | core + shell + `toml` + `clap` |
+| `cargo-semvertag`  | `cargo semvertag` &mdash; print the git-derived version; `cargo semvertag check` &mdash; validate `Cargo.toml` version against the latest tag. | core + shell + `toml` + `clap` |
 
 `semvertag-core` is the heart of it &mdash; feed it a `Describe` struct and call `derive()`. It's zero-I/O, fully testable, and useful even if you already call `git describe` yourself (or use `git2`).
 
 ## Quick start
+
+### Verify compliance with `cargo semvertag check`
+
+The quickest way to see if your project is compliant: install the CLI and run `check`.
+Here's what a **non-compliant** project looks like — the tag says `1.0.0` but
+`Cargo.toml` still reads `1.0.0` despite being several commits ahead:
+
+```sh
+$ cargo install cargo-semvertag
+$ cargo semvertag check
+error: Cargo.toml version 1.0.0 is not a legal successor to tag 1.0.0
+       (tag 1.0.0 is a plain release and must already have a bumped manifest
+        on the first post-release commit)
+```
+
+The first commit after a tagged release must bump `Cargo.toml`; otherwise `check`
+exits with code `1`. Wire this into your tagging hook or CI to catch mismatches
+before they ship (see [SPEC §8](SPEC.md#8-optional-cargotoml-successor-validation)).
+
+The same command on a green project reports success — see the _Validate
+`Cargo.toml` before you tag_ subsection further down.
 
 ### Embed your version with `semvertag-shell`
 
@@ -92,7 +113,7 @@ pub const VERSION: &str = env!("SEMVERTAG_VERSION");
 
 ### Manual `git` invocation (escape hatch)
 
-If your crate *is* `semvertag-core` (or depends on it at runtime), using `semvertag-shell` in `build-dependencies` creates a cycle &mdash; shell depends on core, and your crate would depend on shell at build time while core depends on your crate at runtime. In that case, use `semvertag-core` directly and invoke `git` yourself:
+If your crate _is_ `semvertag-core` (or depends on it at runtime), using `semvertag-shell` in `build-dependencies` creates a cycle &mdash; shell depends on core, and your crate would depend on shell at build time while core depends on your crate at runtime. In that case, use `semvertag-core` directly and invoke `git` yourself:
 
 ```toml
 # Cargo.toml
@@ -169,7 +190,7 @@ A leading `v` or `V` is stripped from tags (`v1.0.0` &rarr; `1.0.0`). This cover
 
 ### 0.x versions
 
-`semvertag` treats 0.x the same as any other major version &mdash; `0.1.0` &rarr; `0.2.0` is a minor bump, just like `1.1.0` &rarr; `1.2.0`. It does *not* apply Cargo's left-shifted semver rules for pre-1.0 crates. The crate is about ordering, not compatibility promises. If you need different bump semantics for 0.x, enforce that in your own release tooling.
+`semvertag` treats 0.x the same as any other major version &mdash; `0.1.0` &rarr; `0.2.0` is a minor bump, just like `1.1.0` &rarr; `1.2.0`. It does _not_ apply Cargo's left-shifted semver rules for pre-1.0 crates. The crate is about ordering, not compatibility promises. If you need different bump semantics for 0.x, enforce that in your own release tooling.
 
 ### Shallow clones
 

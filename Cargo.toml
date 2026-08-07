@@ -2,6 +2,6 @@
 members = [
   "crates/semvertag-core",
   "crates/semvertag-shell",
-  "crates/semvertag-cli",
+  "crates/cargo-semvertag",
 ]
 resolver = "2"
