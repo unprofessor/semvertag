@@ -6,7 +6,7 @@ on:
     # Release tags only (v1.2.3). Glob dialect, not regex: `.` is literal,
     # `[0-9]+` = one or more digits, pattern must match the whole tag, so
     # prerelease tags like v1.2.3-rc.1 never trigger publish.
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
     branches: [main]
 
@@ -64,14 +64,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # OIDC token for crates.io trusted publishing -- no token secret needed.
-      # Requires a trusted publisher entry for this repo in crates.io settings.
-      id-token: write
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # No git credentials in the worktree: nothing to leak, and trusted
-          # publishing only needs the OIDC token.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
