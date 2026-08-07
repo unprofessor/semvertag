@@ -5,15 +5,15 @@
 //!
 //! # Commands
 //!
-//! - *(default)* `cargo semvertag` — print the version derived from `git
+//! - *(default)* `cargo semvertag` -- print the version derived from `git
 //!   describe` (the result of [`semvertag_core::derive`], e.g.
 //!   `1.2.4-dev.3+g87af40b`). Handy for build scripts and version embedding.
-//! - `cargo semvertag derive` — same, explicitly.
-//! - `cargo semvertag check` — validate that `Cargo.toml`'s `package.version`
+//! - `cargo semvertag derive` -- same, explicitly.
+//! - `cargo semvertag check` -- validate that `Cargo.toml`'s `package.version`
 //!   is legal for the current commit: equal to the latest tag at the tagged
 //!   release commit itself, or a legal single-step bump (patch+1, minor+1 with
 //!   patch=0, or major+1 with minor=patch=0) on any commit after it. Intended
-//!   for CI or a pre-tag hook, not for every `cargo build` — see SPEC §8 and
+//!   for CI or a pre-tag hook, not for every `cargo build` -- see SPEC sec. 8 and
 //!   [`semvertag_core::is_valid_successor`].
 //!
 //! `--version` / `-V` prints the `cargo-semvertag` version (standard CLI
@@ -21,10 +21,10 @@
 //!
 //! # Exit codes
 //!
-//! - `0` — success.
-//! - `1` — `check` failed: the version is not legal (`LessThanLatest`,
+//! - `0` -- success.
+//! - `1` -- `check` failed: the version is not legal (`LessThanLatest`,
 //!   `NotBumped`, `TagManifestMismatch`, or `IllegalGap`).
-//! - `2` — an error occurred (no git, no tags, unreadable Cargo.toml, etc.).
+//! - `2` -- an error occurred (no git, no tags, unreadable Cargo.toml, etc.).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -93,7 +93,7 @@ fn run() -> Result<(), AppError> {
     }
 }
 
-/// Print the version derived from `git describe` (SPEC §5).
+/// Print the version derived from `git describe` (SPEC sec. 5).
 fn print_derived_version() -> Result<(), AppError> {
     let describe = describe_raw(Path::new("."))
         .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
@@ -163,7 +163,7 @@ fn read_package_version(path: &Path) -> Result<Version, Box<dyn std::error::Erro
         return Ok(Version::parse(v)?);
     }
 
-    // Inherited: version.workspace = true → resolve from workspace root.
+    // Inherited: version.workspace = true -> resolve from workspace root.
     let workspace_val = package
         .get("version")
         .and_then(|v| v.get("workspace"))

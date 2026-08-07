@@ -4,7 +4,7 @@
 
 Invokes `git describe --tags --long --always --dirty=.dirty`, feeds the output
 to [`semvertag-core`](https://crates.io/crates/semvertag-core), and returns a
-parsed `semver::Version` that orders correctly — every commit forward is a
+parsed `semver::Version` that orders correctly &mdash; every commit forward is a
 version forward.
 
 ## Usage: embed your git version at build time
@@ -41,7 +41,7 @@ For more control, use `describe_in(repo)` (a custom repository path) or
 `describe_raw(repo)` (the raw `Describe` struct, before derivation).
 
 If your crate also uses `semvertag-core` at runtime, depend on `semvertag-core`
-directly instead and invoke `git` yourself — see the
+directly instead and invoke `git` yourself &mdash; see the
 [project README](https://github.com/unprofessor/semvertag) for a worked
 `build.rs` example.
 

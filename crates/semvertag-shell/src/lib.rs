@@ -8,11 +8,11 @@
 //! mode: `git describe` runs but reports a commit count of 0 and the bare HEAD
 //! hash, producing a plausible-looking but wrong version. This adapter detects
 //! a `.git/shallow` file and returns [`ShellError::ShallowClone`] instead of a
-//! silently incorrect result. The check is best-effort — it covers the common
+//! silently incorrect result. The check is best-effort -- it covers the common
 //! worktree-root case but may miss `gitdir:` pointer files, submodules, or
 //! other layouts; a missed detection surfaces as a wrong version rather than a
 //! crash, which is acceptable until a real-world failure forces a more complete
-//! probe (see SPEC §4.2).
+//! probe (see SPEC sec. 4.2).
 //!
 //! # Examples
 //!
@@ -57,7 +57,7 @@ impl std::fmt::Display for ShellError {
         match self {
             ShellError::ShallowClone => write!(
                 f,
-                "shallow clone detected (.git/shallow present); git describe would report a wrong commit count — fetch full history or use fetch-depth: 0"
+                "shallow clone detected (.git/shallow present); git describe would report a wrong commit count -- fetch full history or use fetch-depth: 0"
             ),
             ShellError::GitUnavailable => write!(f, "git binary not found on PATH"),
             ShellError::GitDescribeFailed { stderr } => {
@@ -84,7 +84,7 @@ impl From<DeriveError> for ShellError {
 }
 
 /// The version of semvertag-shell itself, derived from git at build time via
-/// the crate's own `build.rs` (dogfooding — see SPEC §4.5).
+/// the crate's own `build.rs` (dogfooding -- see SPEC sec. 4.5).
 ///
 /// Falls back to `"0.0.0-unknown"` when the build couldn't reach git.
 pub const VERSION: &str = env!("SEMVERTAG_VERSION");
@@ -128,7 +128,7 @@ pub fn describe_in(repo: &Path) -> Result<semver::Version, ShellError> {
 }
 
 /// Like [`describe_in`] but returns the parsed [`Describe`] without deriving the
-/// final version — useful when a caller wants to inspect the commit count or
+/// final version -- useful when a caller wants to inspect the commit count or
 /// hash, or apply a custom derivation.
 pub fn describe_raw(repo: &Path) -> Result<Describe, ShellError> {
     if is_shallow(repo) {
@@ -155,8 +155,8 @@ pub fn describe_raw(repo: &Path) -> Result<Describe, ShellError> {
 /// Best-effort shallow-clone check: look for `.git/shallow` under `repo`.
 ///
 /// This handles the common worktree-root layout. It may miss `gitdir:` pointer
-/// files, submodules, or worktrees split via `git worktree` — all known
-/// limitations, documented in SPEC §4.2.
+/// files, submodules, or worktrees split via `git worktree` -- all known
+/// limitations, documented in SPEC sec. 4.2.
 fn is_shallow(repo: &Path) -> bool {
     repo.join(".git").join("shallow").exists()
 }

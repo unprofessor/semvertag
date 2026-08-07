@@ -1,6 +1,6 @@
 //! Dogfooding: derive semvertag-shell's own version from git at build time.
 //!
-//! This is the §4.5 "documented pattern" — a build.rs that uses
+//! This is the sec. 4.5 "documented pattern" -- a build.rs that uses
 //! `semvertag-core` (as a build-dependency) to parse `git describe` output and
 //! derive a comparable version, then emits it as `cargo:rustc-env` so
 //! `env!("SEMVERTAG_VERSION")` is available in the crate as
@@ -8,19 +8,19 @@
 //!
 //! We intentionally do *not* depend on `semvertag-shell` itself here (that would
 //! be a cyclic build-dependency). Instead we inline the minimal `git describe`
-//! invocation and lean on `semvertag-core` for parsing/derivation — exactly the
+//! invocation and lean on `semvertag-core` for parsing/derivation -- exactly the
 //! pattern the spec documents for crates that want to embed their own version
 //! without pulling in a full adapter at build time. Once `semvertag-macros`
 //! exists (milestone 5) this build.rs collapses to a single macro call.
 //!
 //! On any failure (no git, no tags, shallow clone, unparseable output) we fall
-//! back rather than failing the build — a missing version string should never
+//! back rather than failing the build -- a missing version string should never
 //! break `cargo build` for someone who just unpacked a tarball.
 //!
 //! When git is reachable but there are no tags, we derive `0.0.0-dev.N+g<hash>`
 //! where `N` is the total commit count (`git rev-list --count HEAD`). This keeps
 //! an untagged project's versions monotonic and below any tagged release,
-//! matching the §5 derivation scheme with `0.0.0` as the implicit base.
+//! matching the sec. 5 derivation scheme with `0.0.0` as the implicit base.
 //!
 //! Only when git itself is unreachable (no `.git` dir, shallow clone, git
 //! binary missing) do we fall back to the static `0.0.0-unknown`.
@@ -31,7 +31,7 @@ use std::process::Command;
 const FALLBACK: &str = "0.0.0-unknown";
 
 fn main() {
-    // Re-run whenever the git state might have changed. Best-effort per §4.5;
+    // Re-run whenever the git state might have changed. Best-effort per sec. 4.5;
     // misses packed refs, but that's documented.
     for p in [".git/HEAD", ".git/index", ".git/refs/tags"] {
         println!("cargo:rerun-if-changed={p}");
@@ -96,7 +96,7 @@ fn derive_version(manifest_dir: &Path) -> Option<String> {
     }
 }
 
-/// `git rev-list --count HEAD` — total number of commits reachable from HEAD.
+/// `git rev-list --count HEAD` -- total number of commits reachable from HEAD.
 fn commit_count(repo: &Path) -> Option<u64> {
     let output = Command::new("git")
         .arg("-C")

@@ -4,11 +4,11 @@
 
 Two commands, plus the standard version flag:
 
-- `cargo semvertag` (default) — print the version derived from `git describe`,
+- `cargo semvertag` (default) &mdash; print the version derived from `git describe`,
   e.g. `1.2.4-dev.3+g87af40b`. Handy in build scripts.
-- `cargo semvertag check` — validate your `Cargo.toml` version against the
+- `cargo semvertag check` &mdash; validate your `Cargo.toml` version against the
   latest git tag.
-- `cargo-semvertag --version` / `-V` — print the tool's own version.
+- `cargo-semvertag --version` / `-V` &mdash; print the tool's own version.
 
 ## `check`
 
@@ -37,7 +37,7 @@ check bails out rather than guessing.
 **Exit codes:** `0` ok, `1` check failed, `2` operational error (no git, no
 tags, unreadable `Cargo.toml`).
 
-Wire it into a pre-tag hook or CI — it's a release-time check, not something
+Wire it into a pre-tag hook or CI &mdash; it's a release-time check, not something
 you run on every build.
 
 The version derivation logic lives in

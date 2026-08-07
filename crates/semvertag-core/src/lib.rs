@@ -3,7 +3,7 @@
 //!
 //! `git describe --tags` produces strings like `v1.0.0-5-g87af40b`. Treated
 //! naively as a SemVer string, the `-5-g87af40b` suffix parses as a *prerelease*
-//! identifier, which makes a commit 5 past `v1.0.0` sort *before* `v1.0.0` — the
+//! identifier, which makes a commit 5 past `v1.0.0` sort *before* `v1.0.0` -- the
 //! opposite of the intended meaning. This crate rewrites such strings so that
 //! increasing commit count always increases precedence:
 //!
@@ -19,12 +19,12 @@
 //! Given a `tag` (parsed as a [`semver::Version`]), `commits_since`, `hash`, and
 //! `dirty`:
 //!
-//! 1. `commits_since == 0` and not dirty → return `tag` unchanged.
-//! 2. `commits_since == 0` and dirty → `tag` with build metadata `dirty`
+//! 1. `commits_since == 0` and not dirty -> return `tag` unchanged.
+//! 2. `commits_since == 0` and dirty -> `tag` with build metadata `dirty`
 //!    (`1.0.0+dirty`).
-//! 3. `commits_since > 0` and `tag` is a plain release → bump patch, set
+//! 3. `commits_since > 0` and `tag` is a plain release -> bump patch, set
 //!    `pre = "dev.{commits_since}"`, `build = "g{hash}"` (+ `.dirty`).
-//! 4. `commits_since > 0` and `tag` is itself a prerelease → keep
+//! 4. `commits_since > 0` and `tag` is itself a prerelease -> keep
 //!    major/minor/patch, set `pre = "{tag.pre}.dev.{commits_since}"`,
 //!    `build = "g{hash}"` (+ `.dirty`).
 //!
@@ -34,7 +34,7 @@
 //! Dirty state is always build metadata, never a prerelease: dirty/clean isn't an
 //! orderable axis, it's provenance. A dirty build and a clean build at the same
 //! commit therefore compare as *equal* under strict SemVer precedence (build
-//! metadata is ignored for ordering) — this is expected, not a bug.
+//! metadata is ignored for ordering) -- this is expected, not a bug.
 //!
 //! # Tag prefix
 //!
@@ -75,7 +75,7 @@ pub enum DeriveError {
     /// The raw `git describe` string did not match the expected
     /// `<tag>-<count>-g<hash>[.dirty]` shape.
     MalformedDescribeString { input: String },
-    /// No tags were found — the input looked like a bare `--always` fallback
+    /// No tags were found -- the input looked like a bare `--always` fallback
     /// hash.
     NoTagsFound,
 }
@@ -204,7 +204,7 @@ pub fn parse_describe_string(raw: &str) -> Result<Describe, DeriveError> {
     let parts: Vec<&str> = body.split('-').collect();
 
     // Need at least <tag>-<count>-g<hash> (three groups). A single group with no
-    // hyphens is a bare `--always` fallback hash → NoTagsFound.
+    // hyphens is a bare `--always` fallback hash -> NoTagsFound.
     if parts.len() < 3 {
         if parts.len() == 1 {
             return Err(DeriveError::NoTagsFound);
@@ -251,7 +251,7 @@ fn parse_tag_version(tag: &str) -> Result<Version, semver::Error> {
     Version::parse(stripped)
 }
 
-// ----------------------------------------------------------- §8 ---------
+// ----------------------------------------------------------- sec. 8 ---------
 
 /// Errors from [`is_valid_successor`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,7 +261,7 @@ pub enum SuccessorError {
     /// `1.2.3-rc.1` < `1.2.3`).
     LessThanLatest { latest: Version, candidate: Version },
     /// `candidate` equals `latest_release` but HEAD is not the tagged release
-    /// commit — the manifest must be bumped on the first commit after a
+    /// commit -- the manifest must be bumped on the first commit after a
     /// release, so no untagged commit ever reports a released version.
     NotBumped {
         latest: Version,
@@ -269,17 +269,17 @@ pub enum SuccessorError {
         commits_since: u64,
     },
     /// HEAD is the tagged release commit but `candidate` differs from
-    /// `latest_release` — the manifest must equal the tag there, or the
+    /// `latest_release` -- the manifest must equal the tag there, or the
     /// published artifact would diverge from the tag.
     TagManifestMismatch { latest: Version, candidate: Version },
     /// `candidate` is strictly greater than `latest_release` but is not a
-    /// legal single-step bump — skipped versions, arbitrary jumps, or a bump
+    /// legal single-step bump -- skipped versions, arbitrary jumps, or a bump
     /// that doesn't reset lower fields (e.g. minor bump without resetting
     /// patch to 0).
     IllegalGap { latest: Version, candidate: Version },
     /// `latest_release` is itself a prerelease. Deciding what counts as a legal
     /// next version mid-RC cycle (bump the rc, finish the release, or jump
-    /// ahead) is ambiguous and out of scope for v1; see SPEC §8.1.
+    /// ahead) is ambiguous and out of scope for v1; see SPEC sec. 8.1.
     LatestIsPrerelease { latest: Version },
 }
 
@@ -298,7 +298,7 @@ impl fmt::Display for SuccessorError {
                 write!(
                     f,
                     "{candidate} equals the latest tag {latest}, but HEAD is {commits_since} \
-                     commit{plural} past it — bump the manifest version on the first commit \
+                     commit{plural} past it -- bump the manifest version on the first commit \
                      after a release"
                 )
             }
@@ -306,7 +306,7 @@ impl fmt::Display for SuccessorError {
                 write!(
                     f,
                     "HEAD is the tagged release commit for {latest}, but Cargo.toml says \
-                     {candidate} — the manifest version must equal the tag at the release commit"
+                     {candidate} -- the manifest version must equal the tag at the release commit"
                 )
             }
             SuccessorError::IllegalGap { latest, candidate } => {
@@ -330,15 +330,15 @@ impl std::error::Error for SuccessorError {}
 ///
 /// `latest_release` must be a plain release (no prerelease); if it is itself a
 /// prerelease, returns [`SuccessorError::LatestIsPrerelease`] rather than
-/// guessing — see SPEC §8.1.
+/// guessing -- see SPEC sec. 8.1.
 ///
-/// `commits_since` is the number of commits between HEAD and the tag — `0`
+/// `commits_since` is the number of commits between HEAD and the tag -- `0`
 /// exactly when HEAD is the tagged release commit itself.
 ///
 /// A `candidate` is legal when it is one of:
 ///
 /// - at the tagged release commit (`commits_since == 0`): equal to
-///   `latest_release` — the manifest must match the tag there, or the
+///   `latest_release` -- the manifest must match the tag there, or the
 ///   published artifact would diverge from the tag;
 /// - on any other commit: `patch + 1` (minor/major unchanged), `minor + 1`
 ///   (patch reset to `0`, major unchanged), or `major + 1` (minor and patch
@@ -350,21 +350,21 @@ impl std::error::Error for SuccessorError {}
 /// consistent with what [`derive`] reports (`manifest >= derive(HEAD)`, with
 /// equality only at the tag).
 ///
-/// The result is decided by precedence (see SPEC §8.2):
+/// The result is decided by precedence (see SPEC sec. 8.2):
 ///
-/// 1. `candidate < latest_release` → [`SuccessorError::LessThanLatest`]. This
+/// 1. `candidate < latest_release` -> [`SuccessorError::LessThanLatest`]. This
 ///    naturally captures prereleases of `latest_release` itself (e.g.
 ///    `1.2.3-rc.1` < `1.2.3`).
-/// 2. `commits_since == 0` and `candidate != latest_release` →
+/// 2. `commits_since == 0` and `candidate != latest_release` ->
 ///    [`SuccessorError::TagManifestMismatch`].
-/// 3. `candidate == latest_release` (off the tag) →
+/// 3. `candidate == latest_release` (off the tag) ->
 ///    [`SuccessorError::NotBumped`].
-/// 4. else, if `candidate` is not one of the legal bumps above →
+/// 4. else, if `candidate` is not one of the legal bumps above ->
 ///    [`SuccessorError::IllegalGap`].
-/// 5. else → `Ok`.
+/// 5. else -> `Ok`.
 ///
 /// This crate does **not** inspect commit history or diffs to judge *which*
-/// bump the changes warrant — it only validates that the bump, whatever it is,
+/// bump the changes warrant -- it only validates that the bump, whatever it is,
 /// is a legal single step.
 ///
 /// # Examples
@@ -429,7 +429,7 @@ pub fn is_valid_successor(
     //    Prereleases are never legal successors of a plain release (they sort
     //    below their own release and were caught at step 1, or below latest and
     //    caught there; a prerelease above latest would be e.g. 1.2.3-rc.1 vs
-    //    latest 1.2.2 which is handled as IllegalGap here — it's not a plain
+    //    latest 1.2.2 which is handled as IllegalGap here -- it's not a plain
     //    bump).
     let is_legal = candidate.pre.is_empty()
         && (
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn zero_x_is_not_special_cased() {
-        // §5/§11: always bump patch, even for 0.x.
+        // sec. 5/sec. 11: always bump patch, even for 0.x.
         assert_eq!(
             derive(&describe("0.1.0", 1, "87af40b", false))
                 .unwrap()
@@ -653,7 +653,7 @@ mod tests {
         }
     }
 
-    // --------------------------------------------------------------- §8.4 ----
+    // --------------------------------------------------------------- sec. 8.4 ----
 
     fn v(maj: u64, min: u64, pat: u64) -> Version {
         Version::new(maj, min, pat)
@@ -665,13 +665,13 @@ mod tests {
 
     #[test]
     fn successor_equal_on_tag_is_ok() {
-        // §8.4: at the tagged release commit, the manifest must equal the tag.
+        // sec. 8.4: at the tagged release commit, the manifest must equal the tag.
         assert!(is_valid_successor(&v(1, 2, 3), &v(1, 2, 3), 0).is_ok());
     }
 
     #[test]
     fn successor_equal_off_tag_is_not_bumped() {
-        // §8.4: the same version off the tag is "not yet bumped" — the first
+        // sec. 8.4: the same version off the tag is "not yet bumped" -- the first
         // commit after a release must carry the next version, however long
         // that takes.
         let err = is_valid_successor(&v(1, 2, 3), &v(1, 2, 3), 1).unwrap_err();
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn successor_bump_at_tagged_commit_is_mismatch() {
-        // §8.4: even a legal bump at the tagged commit itself is a mismatch —
+        // sec. 8.4: even a legal bump at the tagged commit itself is a mismatch --
         // at the release commit only equality is valid.
         let err = is_valid_successor(&v(1, 2, 3), &v(1, 2, 4), 0).unwrap_err();
         assert!(
@@ -767,8 +767,8 @@ mod tests {
 
     #[test]
     fn successor_zero_x_not_special_cased() {
-        // §8.4: 0.x is not specially cased here either, consistent with §5/§11.
-        // 0.1.0 -> 0.2.0 is a minor bump (patch reset to 0) — legal.
+        // sec. 8.4: 0.x is not specially cased here either, consistent with sec. 5/sec. 11.
+        // 0.1.0 -> 0.2.0 is a minor bump (patch reset to 0) -- legal.
         assert!(is_valid_successor(&v(0, 1, 0), &v(0, 2, 0), 1).is_ok());
     }
 
@@ -799,7 +799,7 @@ mod proptests {
     }
 
     proptest! {
-        // Monotonicity: for a fixed plain-release tag, n1 < n2 ⇒ derive(n1) < derive(n2).
+        // Monotonicity: for a fixed plain-release tag, n1 < n2 => derive(n1) < derive(n2).
         #[test]
         fn monotonic_in_commits(tag in tag_strategy(), n1 in 0u64..1000, n2 in 0u64..1000) {
             let (n1, n2) = if n1 < n2 { (n1, n2) } else { (n2, n1) };
@@ -841,7 +841,7 @@ mod proptests {
             prop_assert_eq!(v, reparsed);
         }
 
-        // §8.4: any legal bump applied to a random plain-release is accepted at
+        // sec. 8.4: any legal bump applied to a random plain-release is accepted at
         // an untagged commit; equality is accepted only on the tag itself.
         #[test]
         fn successor_accepts_legal_bumps(
@@ -858,7 +858,7 @@ mod proptests {
             prop_assert!(is_valid_successor(&latest, &latest, n).is_err());
         }
 
-        // §8.4: any candidate strictly less than latest is LessThanLatest.
+        // sec. 8.4: any candidate strictly less than latest is LessThanLatest.
         #[test]
         fn successor_rejects_lower(maj in 1u64..=50, min in 0u64..=50, pat in 0u64..=50) {
             let latest = Version::new(maj, min, pat);

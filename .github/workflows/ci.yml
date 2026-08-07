@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # OIDC token for crates.io trusted publishing — no token secret needed.
+      # OIDC token for crates.io trusted publishing -- no token secret needed.
       # Requires a trusted publisher entry for this repo in crates.io settings.
       id-token: write
     steps:
