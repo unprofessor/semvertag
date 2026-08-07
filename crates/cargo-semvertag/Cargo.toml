@@ -1,6 +1,6 @@
 [package]
 name = "cargo-semvertag"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.74"
 description = "cargo-semvertag: print the git-derived SemVer version, or validate Cargo.toml against the latest tag"
@@ -14,8 +14,8 @@ name = "cargo-semvertag"
 path = "src/main.rs"
 
 [dependencies]
-semvertag-core = { path = "../semvertag-core", version = "0.2.0" }
-semvertag-shell = { path = "../semvertag-shell", version = "0.2.0" }
+semvertag-core = { path = "../semvertag-core", version = "0.2.1" }
+semvertag-shell = { path = "../semvertag-shell", version = "0.2.1" }
 semver = "1"
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
