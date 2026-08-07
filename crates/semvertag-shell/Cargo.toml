@@ -1,6 +1,6 @@
 [package]
 name = "semvertag-shell"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.74"
 description = "Shell-out adapter: derive a SemVer version from git describe"
@@ -10,11 +10,11 @@ keywords = ["semver", "git", "version", "describe"]
 categories = ["development-tools"]
 
 [dependencies]
-semvertag-core = { path = "../semvertag-core", version = "0.1.0" }
+semvertag-core = { path = "../semvertag-core", version = "0.2.0" }
 semver = "1"
 
 [dev-dependencies]
 tempfile = "3"
 
 [build-dependencies]
-semvertag-core = { path = "../semvertag-core", version = "0.1.0" }
+semvertag-core = { path = "../semvertag-core", version = "0.2.0" }
