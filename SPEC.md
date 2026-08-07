@@ -55,7 +55,7 @@ semvertag/
     semvertag-shell/     shells out to `git describe`, minimal deps
     semvertag-git2/      optional libgit2-backed adapter (no git binary needed)
     semvertag-macros/    optional proc-macro for compile-time embedding
-    semvertag-cli/       optional `cargo-semvertag` binary (release-time checks, e.g. sec. 8)
+    cargo-semvertag/     optional `cargo-semvertag` binary (release-time checks, e.g. sec. 8)
   Cargo.toml           workspace root
 ```
 
@@ -325,7 +325,7 @@ governs the `> latest_release`, off-tag region.
 
 ### 8.3 CLI integration
 
-New crate `semvertag-cli`, binary `cargo-semvertag`, argument parsing via
+New crate `cargo-semvertag`, binary `cargo-semvertag`, argument parsing via
 `clap`:
 
 - `cargo semvertag` (default) / `cargo semvertag derive` &mdash; print the version
@@ -369,7 +369,7 @@ accepts equality only on the tag; for any candidate strictly less than
 - `semvertag-shell`: no extra deps beyond `std::process::Command`.
 - `semvertag-git2`: `git2` crate (optional feature, not default &mdash; keeps `semvertag-core`
   and `semvertag-shell` dependency-light).
-- `semvertag-cli`: a TOML-parsing crate (`toml` + `cargo_toml`, or hand-rolled
+- `cargo-semvertag`: a TOML-parsing crate (`toml` + `cargo_toml`, or hand-rolled
   minimal parsing of just `package.version`) and `clap` (derive feature) for
   argument parsing.
 - Dev-deps: `proptest`, `tempfile`, `assert_cmd` (for integration tests).
@@ -384,7 +384,7 @@ accepts equality only on the tag; for any candidate strictly less than
 4. `semvertag-git2` adapter (optional, only if the `git` binary dependency
    actually becomes a problem in practice).
 5. `semvertag-macros` (optional, ergonomics-only &mdash; not required for correctness).
-6. `is_valid_successor` in `semvertag-core` + `semvertag-cli`'s `cargo semvertag check`
+6. `is_valid_successor` in `semvertag-core` + `cargo-semvertag`'s `cargo semvertag check`
    (&sect;8) &mdash; independent of 4&ndash;5, can slot in any time after milestone 1.
 
 ## 11. Open questions

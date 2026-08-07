@@ -1,4 +1,4 @@
-# semvertag-cli
+# cargo-semvertag
 
 **`cargo-semvertag`: git-tag-derived SemVer tooling.**
 
