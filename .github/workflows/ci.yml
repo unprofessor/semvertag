@@ -27,6 +27,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
+          toolchain: stable
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -39,6 +40,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
+          toolchain: stable
           components: clippy
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -50,6 +52,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
       - run: cargo test --workspace
 
   publish:
@@ -70,6 +74,8 @@ jobs:
           # publishing only needs the OIDC token.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
       # Dependency order matters: shell needs core on crates.io, cli needs both.
       # cargo publish blocks until each crate is visible in the index, so
       # sequential steps are safe. A forgotten version bump fails loudly here
