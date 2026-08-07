@@ -64,8 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # OIDC token for crates.io trusted publishing — no long-lived secret.
+      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -73,13 +73,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: stable
+      # Exchange the GitHub Actions OIDC token for a short-lived crates.io access token.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       # Dependency order matters: shell needs core on crates.io, cli needs both.
       # cargo publish blocks until each crate is visible in the index, so
       # sequential steps are safe. A forgotten version bump fails loudly here
       # ("crate version already uploaded").
       - name: Publish semvertag-core
         run: cargo publish -p semvertag-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
       - name: Publish semvertag-shell
         run: cargo publish -p semvertag-shell
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
       - name: Publish cargo-semvertag
         run: cargo publish -p cargo-semvertag
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
