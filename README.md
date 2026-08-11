@@ -177,6 +177,13 @@ a regression or an illegal jump. If the latest tag is itself a prerelease, the
 check bails out rather than guessing &mdash; deciding what's legal mid-RC is outside
 v1 scope.
 
+`check` expects the whole repository to be **uniformly versioned** &mdash; git tags
+commits, not trees. Workspaces validate against their single shared version
+(`version.workspace = true` resolves through the root's
+`[workspace.package].version`; at a virtual workspace root that workspace
+version is checked directly). One tag cannot validate several divergent
+member versions.
+
 Exit codes: `0` ok, `1` check failed, `2` operational error (no git, no tags, unreadable `Cargo.toml`). Wire this into a pre-tag hook or CI &mdash; it's a release-time check, not something you run on every build (see [SPEC &sect;8](SPEC.md#8-optional-cargotoml-successor-validation)).
 
 Bare `cargo semvertag` (no subcommand) prints the version derived from `git`

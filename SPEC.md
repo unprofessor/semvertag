@@ -302,6 +302,16 @@ release/tag time and shouldn't fail a routine `cargo build`.
   bump the changes actually warrant (that's breaking-change detection &mdash;
   `cargo-semver-checks` / `cargo-smart-release` territory, out of scope here).
   This only validates that the bump, whatever it is, is a legal single step.
+- Expects the whole repository to be **uniformly versioned**, because git
+  tags *commits*, not trees: a tag names one commit for the entire repo, so
+  `check` compares that one latest tag against the one version the
+  repository declares. That version is the member's `package.version` (with
+  `version.workspace = true` resolved through the root), or &mdash; at a
+  virtual workspace root (`[workspace]` without `[package]`) &mdash; the
+  root's `[workspace.package].version` directly. Workspaces where individual
+  members pin versions that diverge from the shared one cannot be validated
+  by a single tag and are out of scope; the lockstep layout
+  (`[workspace.package]`, all members inheriting) is the supported model.
 
 ### 8.2 API sketch
 
@@ -380,11 +390,20 @@ New crate `cargo-semvertag`, binary `cargo-semvertag`, argument parsing via
   repos. Optional `--manifest-path` for workspace members. Handy in build
   scripts.
 - `cargo semvertag check` &mdash; the validator:
-  - Reads `package.version` from `Cargo.toml` (workspace-member-aware).
+  - Reads `package.version` from `Cargo.toml` (workspace-member-aware,
+    `version.workspace = true` resolved through the workspace root; at a
+    virtual workspace root the version checked is
+    `[workspace.package].version` &mdash; the repo is expected to be
+    uniformly versioned, see &sect;8.1).
   - Resolves the latest tag via the existing `semvertag-shell` adapter and
     passes the tag's commit distance to `is_valid_successor` (`0` when HEAD is
     the tagged release commit itself) &mdash; with the uncommitted-bump relaxation
-    of &sect;8.1 applied on top.
+    of &sect;8.1 applied on top. Git state (describe, the shallow-clone guard)
+    is probed at the *manifest's* repository root (`git rev-parse
+    --show-toplevel` from the manifest's directory), so a `--manifest-path`
+    into a different repository validates against that repository's tags,
+    and the shallow guard fires consistently no matter how deep below the
+    repo root the command runs.
   - Exits non-zero with a readable diagnostic on failure; the
     `TagManifestMismatch` diagnostic names the three legal next-release
     versions (patch/minor/major) so the fix is copy-pasteable. Intended for CI

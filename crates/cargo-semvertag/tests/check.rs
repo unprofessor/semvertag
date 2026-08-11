@@ -578,6 +578,94 @@ fn check_uncommitted_workspace_bump_from_member_dir_is_ok() {
 }
 
 #[test]
+fn check_at_virtual_workspace_root_is_ok() {
+    // Issue #1 case A: at a virtual workspace root ([workspace] without
+    // [package]), check validates the root's [workspace.package].version.
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_workspace_repo(&repo, "0.1.0");
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v0.1.0", "-m", "release"]);
+    write_workspace_repo(&repo, "0.2.0");
+    commit(&repo, "bump workspace version");
+
+    check_in(&repo)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "ok: Cargo.toml version 0.2.0 is a legal successor to tag 0.1.0",
+        ));
+}
+
+#[test]
+fn derive_at_virtual_workspace_root_uses_workspace_version() {
+    // The hint resolves from [workspace.package].version at a virtual root,
+    // without the "missing [package] table" warning.
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_workspace_repo(&repo, "0.1.0");
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v0.1.0", "-m", "release"]);
+    write_workspace_repo(&repo, "0.2.0");
+    commit(&repo, "bump workspace version");
+
+    derive_in(&repo)
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("0.2.0-dev.1+g"))
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
+fn check_foreign_manifest_uses_its_repos_tags() {
+    // Issue #1 secondary: git state must come from the manifest's repository,
+    // not the cwd's -- a --manifest-path into another repo validates against
+    // that repo's tags.
+    skip_if_no_git!();
+    let (_dir_a, repo_a) = fresh_repo();
+    write_cargo_toml(&repo_a, "0.1.0");
+    commit(&repo_a, "initial");
+    run_git(&repo_a, &["tag", "-a", "v0.1.0", "-m", "release"]);
+
+    let (_dir_b, repo_b) = fresh_repo();
+    write_cargo_toml(&repo_b, "1.2.3");
+    commit(&repo_b, "initial");
+    run_git(&repo_b, &["tag", "-a", "v1.2.3", "-m", "release"]);
+
+    // cwd is repo A; the manifest lives in repo B.
+    let mut cmd = AssertCommand::cargo_bin("cargo-semvertag").unwrap();
+    cmd.args(["check", "--manifest-path"])
+        .arg(repo_b.join("Cargo.toml"))
+        .current_dir(&repo_a);
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "ok: Cargo.toml version 1.2.3 is a legal successor to tag 1.2.3",
+        ));
+}
+
+#[test]
+fn derive_shallow_guard_fires_from_subdirectory() {
+    // Issue #1 secondary: the shallow-clone guard must fire consistently from
+    // anywhere in the repo -- probing at the repo root, not the cwd.
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_cargo_toml(&repo, "1.2.3");
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+    // Simulate a shallow clone: a .git/shallow marker at the repo root.
+    std::fs::write(repo.join(".git/shallow"), "").unwrap();
+    std::fs::create_dir_all(repo.join("sub/deeper")).unwrap();
+
+    let mut cmd = AssertCommand::cargo_bin("cargo-semvertag").unwrap();
+    cmd.current_dir(repo.join("sub/deeper"));
+    cmd.assert()
+        .failure()
+        .code(2)
+        .stderr(predicates::str::contains("shallow clone detected"));
+}
+
+#[test]
 fn derive_with_manifest_path_hints_from_subdirectory() {
     // --manifest-path resolves the hint for a workspace member; the git
     // describe result is repo-wide either way.

@@ -21,9 +21,12 @@
 //!   release commit itself, or a legal single-step bump (patch+1, minor+1 with
 //!   patch=0, or major+1 with minor=patch=0) on any commit after it. An
 //!   uncommitted manifest-version bump at the tagged release commit is treated
-//!   as the first commit of the next cycle (SPEC sec. 8.1). Intended for CI or
-//!   a pre-tag hook, not for every `cargo build` -- see SPEC sec. 8 and
-//!   [`semvertag_core::is_valid_successor`].
+//!   as the first commit of the next cycle (SPEC sec. 8.1). At a virtual
+//!   workspace root (`[workspace]` without `[package]`), the version compared
+//!   is the root's `[workspace.package].version` -- semvertag expects the
+//!   repository to be uniformly versioned, since git tags commits, not trees.
+//!   Intended for CI or a pre-tag hook, not for every `cargo build` -- see
+//!   SPEC sec. 8 and [`semvertag_core::is_valid_successor`].
 //!
 //! `--version` / `-V` prints the `cargo-semvertag` version (standard CLI
 //! semantics).
@@ -109,7 +112,13 @@ fn run() -> Result<(), AppError> {
 
 /// Print the version derived from `git describe` (SPEC sec. 5).
 fn print_derived_version(manifest_path: Option<PathBuf>) -> Result<(), AppError> {
-    let describe = describe_raw(Path::new("."))
+    // Probe git at the manifest's repository root when one is given, the
+    // cwd's repository root otherwise -- see `probe_dir`.
+    let anchor = manifest_path
+        .as_deref()
+        .map(manifest_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let describe = describe_raw(&probe_dir(&anchor))
         .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
     // The manifest's package.version hints the declared next release; when it
     // is a legal successor of the tag, derivation targets it (a minor bump in
@@ -145,8 +154,16 @@ fn read_version_hint(manifest_path: Option<PathBuf>) -> Option<Version> {
 }
 
 fn check(manifest_path: Option<PathBuf>) -> Result<(), AppError> {
-    // 1. Resolve the latest tag via the shell adapter.
-    let describe = describe_raw(Path::new("."))
+    // 1. The manifest anchors both the version read and the git probe: git
+    //    state must come from the manifest's repository, not the cwd's.
+    let manifest_path = manifest_path.unwrap_or_else(|| PathBuf::from("Cargo.toml"));
+
+    let cargo_version = read_package_version(&manifest_path)
+        .map_err(|e| AppError::Other(format!("could not read {}: {e}", manifest_path.display())))?;
+
+    // 2. Resolve the latest tag via the shell adapter, probing at the repo
+    //    root of the manifest's directory (see `probe_dir`).
+    let describe = describe_raw(&probe_dir(&manifest_dir(&manifest_path)))
         .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
 
     let latest = parse_tag_version(&describe.tag).map_err(|e| {
@@ -155,12 +172,6 @@ fn check(manifest_path: Option<PathBuf>) -> Result<(), AppError> {
             describe.tag
         ))
     })?;
-
-    // 2. Read package.version from Cargo.toml (workspace-aware).
-    let manifest_path = manifest_path.unwrap_or_else(|| PathBuf::from("Cargo.toml"));
-
-    let cargo_version = read_package_version(&manifest_path)
-        .map_err(|e| AppError::Other(format!("could not read {}: {e}", manifest_path.display())))?;
 
     // 3. At the tagged release commit, treat an uncommitted manifest-version
     //    change as if it were already the first commit of the next cycle:
@@ -218,10 +229,16 @@ fn parse_tag_version(tag: &str) -> Result<Version, semver::Error> {
 /// levels up.
 fn read_package_version(path: &Path) -> Result<Version, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
-    // The file exists (we just read it), so canonicalization cannot fail for
-    // a reason other than I/O; fall back to the raw parent on error.
-    let manifest_dir = path
-        .canonicalize()
+    version_from_manifest(&content, &manifest_dir(path), &|dir| {
+        std::fs::read_to_string(dir.join("Cargo.toml")).ok()
+    })
+}
+
+/// The directory containing `path`, canonicalized so ancestor walks and git
+/// probes can climb above the current directory. Falls back to the raw parent
+/// when canonicalization fails.
+fn manifest_dir(path: &Path) -> PathBuf {
+    path.canonicalize()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| {
@@ -229,10 +246,18 @@ fn read_package_version(path: &Path) -> Result<Version, Box<dyn std::error::Erro
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(Path::new("."))
                 .to_path_buf()
-        });
-    version_from_manifest(&content, &manifest_dir, &|dir| {
-        std::fs::read_to_string(dir.join("Cargo.toml")).ok()
-    })
+        })
+}
+
+/// The repository root containing `anchor`, so git state (describe output,
+/// the shallow-clone guard) is probed consistently no matter how deep below
+/// the repo root the tool runs -- and from whichever repo a `--manifest-path`
+/// points into. Falls back to `anchor` itself when it isn't inside a
+/// repository, preserving the adapter's own "not a repository" diagnostics.
+fn probe_dir(anchor: &Path) -> PathBuf {
+    git_stdout(anchor, &["rev-parse", "--show-toplevel"])
+        .map(|s| PathBuf::from(s.trim_end()))
+        .unwrap_or_else(|| anchor.to_path_buf())
 }
 
 /// Read `package.version` as committed at HEAD, resolving workspace
@@ -264,6 +289,11 @@ fn committed_package_version(manifest_path: &Path) -> Option<Version> {
 /// `version.workspace = true` by walking `manifest_dir`'s ancestors and reading
 /// each `Cargo.toml` via `read_ancestor` (the filesystem for the working tree,
 /// `git show HEAD:` for the committed state).
+///
+/// A manifest without a `[package]` table is a virtual workspace root: its
+/// version -- if any -- lives in `[workspace.package].version`, on the
+/// assumption that the repository is uniformly versioned (git tags commits,
+/// not trees; see SPEC sec. 8.1).
 fn version_from_manifest(
     content: &str,
     manifest_dir: &Path,
@@ -271,43 +301,54 @@ fn version_from_manifest(
 ) -> Result<Version, Box<dyn std::error::Error>> {
     let manifest: toml::Value = toml::from_str(content)?;
 
-    let package = manifest
-        .get("package")
-        .ok_or_else(|| "missing [package] table".to_string())?;
+    // Direct version: package.version = "1.2.3", or inherited via
+    // version.workspace = true resolved from the workspace root.
+    if let Some(package) = manifest.get("package") {
+        if let Some(v) = package.get("version").and_then(|v| v.as_str()) {
+            return Ok(Version::parse(v)?);
+        }
 
-    // Direct version: package.version = "1.2.3"
-    if let Some(v) = package.get("version").and_then(|v| v.as_str()) {
+        let workspace_val = package
+            .get("version")
+            .and_then(|v| v.get("workspace"))
+            .and_then(|v| v.as_bool());
+
+        if workspace_val == Some(true) {
+            for dir in manifest_dir.ancestors() {
+                let Some(content) = read_ancestor(dir) else {
+                    continue;
+                };
+                let manifest: toml::Value = toml::from_str(&content)?;
+                if manifest.get("workspace").is_some() {
+                    if let Some(v) = manifest
+                        .get("workspace")
+                        .and_then(|w| w.get("package"))
+                        .and_then(|p| p.get("version"))
+                        .and_then(|v| v.as_str())
+                    {
+                        return Ok(Version::parse(v)?);
+                    }
+                    return Err("workspace.package.version not found in workspace root".into());
+                }
+            }
+            return Err("version.workspace = true but no workspace root found".into());
+        }
+
+        return Err("package.version not found or not a string".into());
+    }
+
+    // No [package] table: a virtual workspace root. The next release version
+    // is the one [workspace.package] declares for the whole repository.
+    if let Some(v) = manifest
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+    {
         return Ok(Version::parse(v)?);
     }
 
-    // Inherited: version.workspace = true -> resolve from workspace root.
-    let workspace_val = package
-        .get("version")
-        .and_then(|v| v.get("workspace"))
-        .and_then(|v| v.as_bool());
-
-    if workspace_val == Some(true) {
-        for dir in manifest_dir.ancestors() {
-            let Some(content) = read_ancestor(dir) else {
-                continue;
-            };
-            let manifest: toml::Value = toml::from_str(&content)?;
-            if manifest.get("workspace").is_some() {
-                if let Some(v) = manifest
-                    .get("workspace")
-                    .and_then(|w| w.get("package"))
-                    .and_then(|p| p.get("version"))
-                    .and_then(|v| v.as_str())
-                {
-                    return Ok(Version::parse(v)?);
-                }
-                return Err("workspace.package.version not found in workspace root".into());
-            }
-        }
-        return Err("version.workspace = true but no workspace root found".into());
-    }
-
-    Err("package.version not found or not a string".into())
+    Err("missing [package] table (and no [workspace.package].version)".into())
 }
 
 /// Run `git` in `dir`, returning stdout on success and `None` on any failure.

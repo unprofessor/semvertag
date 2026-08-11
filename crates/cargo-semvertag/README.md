@@ -44,11 +44,23 @@ commit never reports a version equal to a released one. Anything else is a
 regression or an illegal jump. If the latest tag is itself a prerelease, the
 check bails out rather than guessing.
 
+`check` expects the whole repository to be **uniformly versioned** -- git
+tags commits, not trees -- so a workspace is validated against its single
+shared version: `version.workspace = true` members resolve through the
+root's `[workspace.package].version`, and at a virtual workspace root
+(`[workspace]` without `[package]`) that workspace version is checked
+directly. Mixed-version workspaces (members pinning their own divergent
+versions) are out of scope -- one tag cannot validate many versions.
+
 **Exit codes:** `0` ok, `1` check failed, `2` operational error (no git, no
 tags, unreadable `Cargo.toml`).
 
 Wire it into a pre-tag hook or CI &mdash; it's a release-time check, not something
 you run on every build.
+
+Git state is probed at the *manifest's* repository root, so `--manifest-path`
+into a different repository validates against that repository's tags, and
+the shallow-clone guard fires consistently from any subdirectory.
 
 The version derivation logic lives in
 [`semvertag-core`](https://crates.io/crates/semvertag-core) and
