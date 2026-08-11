@@ -119,19 +119,38 @@ Acceptable until it bites in practice.
 
 ## 5. Derivation algorithm (formal)
 
-Given `tag` (parsed as `semver::Version`), `commits_since: u64`, `hash: &str`, `dirty: bool`:
+Given `tag` (parsed as `semver::Version`), `commits_since: u64`, `hash: &str`, `dirty: bool`,
+and `hint: Option<Version>` (the manifest's declared next version, e.g. `Cargo.toml`'s
+`package.version`; `None` for plain `derive()`):
 
 1. If `commits_since == 0` and not `dirty`: return `tag` unchanged.
 2. If `commits_since == 0` and `dirty`: return `tag` with build metadata `dirty`
    appended (`1.0.0+dirty`).
-3. If `commits_since > 0` and `tag.pre.is_empty()` (plain release tag):
+3. If `commits_since > 0` and `hint` is a legal single-step successor of `tag`
+   (per &sect;8: patch + 1, or minor + 1 with patch = 0, or major + 1 with
+   minor = patch = 0):
+   - use `hint`'s major/minor/patch as the base instead of the blind patch bump
+   - `pre = "dev.{commits_since}"`
+   - `build = "g" + hash` (+ `.dirty` if dirty)
+4. If `commits_since > 0` and `tag.pre.is_empty()` (plain release tag, no legal hint):
    - bump `patch += 1`
    - `pre = "dev.{commits_since}"`
    - `build = "g" + hash` (+ `.dirty` if dirty)
-4. If `commits_since > 0` and `!tag.pre.is_empty()` (tag is itself a prerelease):
+5. If `commits_since > 0` and `!tag.pre.is_empty()` (tag is itself a prerelease):
    - major/minor/patch unchanged
    - `pre = "{tag.pre}.dev.{commits_since}"`
    - `build = "g" + hash` (+ `.dirty` if dirty)
+
+The hint (step 3) is how a developer-performed bump shows up in derived
+versions: the manifest is the declaration of the *next* release version, so a
+`Cargo.toml` carrying `0.2.0` after tag `v0.1.0` yields `0.2.0-dev.N` instead
+of `0.1.1-dev.N`. The hint is ignored -- and steps 4/5 apply -- when the
+manifest is missing (non-Cargo repos), not bumped yet, carries an illegal
+version, or when HEAD *is* the tag (the tagged version wins even if the
+working tree already holds the next version), or when the tag is itself a
+prerelease (mid-RC, successor rules don't apply per &sect;8.1). An ignored hint
+is never an error in `derive()`: judging manifests is `is_valid_successor` /
+`check`'s job, not derivation's.
 
 The `g` prefix on the build metadata mirrors `git describe`'s own `g87af40b`
 convention; `Describe.hash` stores the bare short hash without the prefix, and
@@ -158,17 +177,24 @@ comparison rules (numeric fields compare numerically, so `dev.9 < dev.10`).
 
 ### 7.1 Unit tests &mdash; `derive()` (pure, table-driven)
 
-| tag | commits_since | dirty | expected |
-| --- | --- | --- | --- |
-| `1.0.0` | 0 | false | `1.0.0` |
-| `1.0.0` | 0 | true | `1.0.0+dirty` |
-| `1.0.0` | 5 | false | `1.0.1-dev.5+g87af40b` |
-| `1.0.0` | 5 | true | `1.0.1-dev.5+g87af40b.dirty` |
-| `1.0.0-rc.1` | 0 | false | `1.0.0-rc.1` |
-| `1.0.0-rc.1` | 3 | false | `1.0.0-rc.1.dev.3+g87af40b` |
-| `0.1.0` | 1 | false | `0.1.1-dev.1+g87af40b` *(patch bump only &mdash; 0.x is NOT special-cased; document explicitly since Cargo treats 0.x specially for compatibility but this crate is about ordering, not compatibility)* |
-| `1.0.0` | 9 vs `1.0.0` at 10 | &mdash; | assert `derive(9) < derive(10)` (numeric prerelease comparison, not lexical &mdash; this is the case that motivated the whole crate) |
-| `1.0.0` | 99999999 | false | parses without overflow |
+| tag | commits_since | dirty | hint | expected |
+| --- | --- | --- | --- | --- |
+| `1.0.0` | 0 | false | none | `1.0.0` |
+| `1.0.0` | 0 | true | none | `1.0.0+dirty` |
+| `1.0.0` | 5 | false | none | `1.0.1-dev.5+g87af40b` |
+| `1.0.0` | 5 | true | none | `1.0.1-dev.5+g87af40b.dirty` |
+| `1.0.0-rc.1` | 0 | false | none | `1.0.0-rc.1` |
+| `1.0.0-rc.1` | 3 | false | none | `1.0.0-rc.1.dev.3+g87af40b` |
+| `0.1.0` | 1 | false | none | `0.1.1-dev.1+g87af40b` *(patch bump only &mdash; 0.x is NOT special-cased when no hint is given; document explicitly since Cargo treats 0.x specially for compatibility but this crate is about ordering, not compatibility)* |
+| `0.1.0` | 3 | false | `0.2.0` | `0.2.0-dev.3+g87af40b` *(the manifest declares a minor bump &mdash; the legal hint replaces the blind patch bump; 0.x is not special-cased here either, the hint decides the bump)* |
+| `1.2.3` | 1 | false | `1.2.4` | `1.2.4-dev.1+g87af40b` *(legal patch hint, coincides with the blind bump)* |
+| `1.2.3` | 5 | true | `2.0.0` | `2.0.0-dev.5+g87af40b.dirty` *(legal major hint, dirty propagates)* |
+| `1.2.3` | 7 | any | `1.2.3` (not bumped) | `1.2.4-dev.7+g87af40b` *(stale hint falls back to the blind patch bump)* |
+| `1.2.3` | 7 | any | `1.2.5` (illegal gap) | `1.2.4-dev.7+g87af40b` *(illegal hint falls back &mdash; judging it is `check`'s job)* |
+| `1.0.0-rc.1` | 3 | false | `1.0.0` | `1.0.0-rc.1.dev.3+g87af40b` *(hint ignored mid-RC &mdash; chaining rule wins)* |
+| `1.2.3` | 0 | true | `1.3.0` | `1.2.3+dirty` *(the tag wins at the tag commit, even with a bumped working tree)* |
+| `1.0.0` | 9 vs `1.0.0` at 10 | &mdash; | none | assert `derive(9) < derive(10)` (numeric prerelease comparison, not lexical &mdash; this is the case that motivated the whole crate) |
+| `1.0.0` | 99999999 | false | none | parses without overflow |
 
 ### 7.2 Unit tests &mdash; `parse_describe_string()`
 
@@ -237,10 +263,13 @@ users and the easiest one to regress on without a dedicated test.
 A separate, optional feature: check that `Cargo.toml`'s `package.version` is a
 legal next step from the latest tag &mdash; catches "tagged v0.3.0 but forgot to bump
 Cargo.toml", an accidental skip/misfire on the bump, and a manifest left
-sitting on the released version after the release. Kept out of the `derive()`
-path deliberately: `derive()` runs on every build and answers "what version am
-I"; this answers "did someone bump correctly," which only matters at
-release/tag time and shouldn't be wired into routine `cargo build`.
+sitting on the released version after the release. Validation is deliberately
+decoupled from `derive()`: `derive()` runs on every build and answers "what
+version am I". It may *consume* the manifest's version as a hint (&sect;5 step 3)
+&mdash; the developer's bump is the best answer to "what is the next release"
+&mdash; but it never judges it: an illegal manifest version silently falls back to
+the tag-based bump. Judging "did someone bump correctly" only matters at
+release/tag time and shouldn't fail a routine `cargo build`.
 
 ### 8.1 Scope
 
@@ -259,6 +288,16 @@ release/tag time and shouldn't be wired into routine `cargo build`.
   spelled out in &sect;8.2). This is a workflow opinion in a way &sect;2's non-goals are
   not; it is the price of guaranteeing that no untagged commit ever reports a
   released version.
+- One relaxation of that strictness, at the CLI layer only (`cargo-semvertag`,
+  not `is_valid_successor`): at the tagged release commit, an *uncommitted*
+  manifest-version change is validated as if it were already the first commit
+  of the next cycle &mdash; the check compares the working-tree manifest against
+  `HEAD:`'s and, when the version differs, validates with `commits_since = 1`.
+  Bumping Cargo.toml and running `cargo semvertag check` before committing is
+  the natural release workflow; strict at-the-tag equality would punish exactly
+  that order of operations. A *clean* tree at the tag is still judged by
+  equality alone, as is a dirty tree whose manifest version is unchanged from
+  HEAD's.
 - Explicitly does **not** inspect commit history or diffs to judge *which*
   bump the changes actually warrant (that's breaking-change detection &mdash;
   `cargo-semver-checks` / `cargo-smart-release` territory, out of scope here).
@@ -301,6 +340,9 @@ tag must carry the next version. In exchange it buys two invariants:
   everywhere, with equality exactly at the tagged commit. The lenient rule
   allowed a commit to claim `1.2.3` in `Cargo.toml` while `derive()` reported
   `1.2.4-dev.1` for the same commit &mdash; two answers to "what version is this".
+  The hint (&sect;5 step 3) strengthens this: on a legal bump, `derive()`
+  *converges* to the manifest (`derive(HEAD) = 1.3.0-dev.N < manifest = 1.3.0`)
+  instead of answering with a blind patch bump the manifest will never ship.
 
 The result is decided by precedence, not by membership in the list above:
 
@@ -329,14 +371,24 @@ New crate `cargo-semvertag`, binary `cargo-semvertag`, argument parsing via
 `clap`:
 
 - `cargo semvertag` (default) / `cargo semvertag derive` &mdash; print the version
-  derived from `git describe` (`derive()`, &sect;5). Handy in build scripts.
+  derived from `git describe` (`derive_with_hint()`, &sect;5). Honors
+  `package.version` (read with the same workspace-aware logic as `check`) as
+  the hinted next release when it is a legal successor of the tag; a missing,
+  stale, or illegal manifest version silently falls back to the tag-based
+  patch bump &mdash; only a *present but unreadable* manifest gets a warning,
+  never an error, so the command stays safe for build scripts and non-Cargo
+  repos. Optional `--manifest-path` for workspace members. Handy in build
+  scripts.
 - `cargo semvertag check` &mdash; the validator:
   - Reads `package.version` from `Cargo.toml` (workspace-member-aware).
   - Resolves the latest tag via the existing `semvertag-shell` adapter and
     passes the tag's commit distance to `is_valid_successor` (`0` when HEAD is
-    the tagged release commit itself).
-  - Exits non-zero with a readable diagnostic on failure. Intended for CI or a
-    pre-commit/pre-tag hook, not for every `cargo build`.
+    the tagged release commit itself) &mdash; with the uncommitted-bump relaxation
+    of &sect;8.1 applied on top.
+  - Exits non-zero with a readable diagnostic on failure; the
+    `TagManifestMismatch` diagnostic names the three legal next-release
+    versions (patch/minor/major) so the fix is copy-pasteable. Intended for CI
+    or a pre-commit/pre-tag hook, not for every `cargo build`.
 - `cargo-semvertag --version` / `-V` &mdash; print the tool's own version (standard
   CLI semantics; there is no `version` subcommand).
 

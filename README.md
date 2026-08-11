@@ -28,13 +28,14 @@ In other words: **monotonic ordering from git history**. Releases sort above rel
 | `v1.0.0-rc.2-0-gabc1234`       | `1.0.0-rc.2`                 | later RC sorts above earlier one          |
 | `v1.0.0-0-gabc1234`            | `1.0.0`                      | plain release beats any RC                |
 | `v1.0.0-5-g87af40b`            | `1.0.1-dev.5+g87af40b`       | 5 past release &rarr; patch bump + dev marker  |
+| `v0.1.0-3-g87af40b` (Cargo.toml: `0.2.0`) | `0.2.0-dev.3+g87af40b` | manifest declares the next release &rarr; hint replaces the blind patch bump |
 | `v1.0.1-0-gabc1234`            | `1.0.1`                      | that release the dev builds led to        |
 
 The derivation rules (see [SPEC.md &sect;5](SPEC.md#5-derivation-algorithm-formal) for the formal spec):
 
 1. **Tag at HEAD, clean** &rarr; the tag as-is.
 2. **Tag at HEAD, dirty** &rarr; tag with `+dirty` build metadata (not a prerelease &mdash; dirty/clean is provenance, not ordering).
-3. **Commits past a plain release** &rarr; bump patch, mark as `dev.{N}` prerelease, attach `g{hash}` build metadata.
+3. **Commits past a plain release** &rarr; bump patch and mark as `dev.{N}` prerelease with `g{hash}` build metadata -- *unless* `Cargo.toml` declares a legal next version (e.g. `0.2.0` after tag `v0.1.0`); then that version is targeted instead (`0.2.0-dev.{N}`), so a developer-performed minor or major bump is honored rather than overridden by a blind patch bump.
 4. **Commits past a prerelease tag** &rarr; keep the version, append `.dev.{N}` to the existing prerelease, attach `g{hash}` build metadata.
 
 A dirty build and a clean build at the same commit compare as **equal** under strict SemVer (build metadata is ignored for precedence). This is intentional &mdash; you can't meaningfully order "built on someone's dirty laptop" against "built in CI."

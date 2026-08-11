@@ -10,6 +10,16 @@ Two commands, plus the standard version flag:
   latest git tag.
 - `cargo-semvertag --version` / `-V` &mdash; print the tool's own version.
 
+The default `derive` command reads `Cargo.toml`'s `package.version` and, when
+it is a legal successor of the latest tag (patch + 1, minor + 1 with patch = 0,
+or major + 1 with minor = patch = 0), targets it: with tag `v0.1.0` and a
+manifest already bumped to `0.2.0`, the derived version is
+`0.2.0-dev.N+g<hash>`, not `0.1.1-dev.N+g<hash>` &mdash; a developer-performed
+minor or major bump is honored rather than overridden by a blind patch bump.
+A missing, stale, or illegal manifest version silently falls back to the
+patch bump; `--manifest-path` selects a different manifest (e.g. a workspace
+member).
+
 ## `check`
 
 Ever tagged `v0.3.0` only to realize `Cargo.toml` still says `0.2.0`?

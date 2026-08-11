@@ -16,15 +16,22 @@
 //!
 //! # Algorithm
 //!
-//! Given a `tag` (parsed as a [`semver::Version`]), `commits_since`, `hash`, and
-//! `dirty`:
+//! Given a `tag` (parsed as a [`semver::Version`]), `commits_since`, `hash`,
+//! `dirty`, and optionally a `hint` (the manifest's declared next version, e.g.
+//! `Cargo.toml`'s `package.version`):
 //!
 //! 1. `commits_since == 0` and not dirty -> return `tag` unchanged.
 //! 2. `commits_since == 0` and dirty -> `tag` with build metadata `dirty`
 //!    (`1.0.0+dirty`).
-//! 3. `commits_since > 0` and `tag` is a plain release -> bump patch, set
-//!    `pre = "dev.{commits_since}"`, `build = "g{hash}"` (+ `.dirty`).
-//! 4. `commits_since > 0` and `tag` is itself a prerelease -> keep
+//! 3. `commits_since > 0` and the hint is a legal single-step successor of
+//!    `tag` (patch+1, minor+1 with patch=0, or major+1 with minor=patch=0) ->
+//!    target the hint instead of a blind patch bump: `pre = "dev.{commits_since}"`,
+//!    `build = "g{hash}"` (+ `.dirty`). This is how the developer's `Cargo.toml`
+//!    bump (e.g. `0.2.0` after tag `v0.1.0`) surfaces as `0.2.0-dev.N` rather
+//!    than `0.1.1-dev.N`.
+//! 4. `commits_since > 0` and `tag` is a plain release (no legal hint) ->
+//!    bump patch, set `pre = "dev.{commits_since}"`, `build = "g{hash}"` (+ `.dirty`).
+//! 5. `commits_since > 0` and `tag` is itself a prerelease -> keep
 //!    major/minor/patch, set `pre = "{tag.pre}.dev.{commits_since}"`,
 //!    `build = "g{hash}"` (+ `.dirty`).
 //!
@@ -105,6 +112,11 @@ impl std::error::Error for DeriveError {
 
 /// Derive a comparable [`semver::Version`] from a [`Describe`].
 ///
+/// Shorthand for [`derive_with_hint`] with no hint: derivation is driven
+/// purely by the tag, always bumping patch past a plain release. When the
+/// manifest's declared `package.version` is available, use [`derive_with_hint`]
+/// so a developer-performed minor/major bump is honored.
+///
 /// See the [crate documentation](crate#algorithm) for the full algorithm.
 ///
 /// # Examples
@@ -131,6 +143,54 @@ impl std::error::Error for DeriveError {
 /// assert_eq!(derive(&d).unwrap().to_string(), "1.0.0+dirty");
 /// ```
 pub fn derive(describe: &Describe) -> Result<Version, DeriveError> {
+    derive_with_hint(describe, None)
+}
+
+/// Derive a comparable [`semver::Version`] from a [`Describe`], honoring an
+/// optional declared next release version.
+///
+/// `hint` (typically `Cargo.toml`'s `package.version`) is used only when it is
+/// a legal single-step successor of the tag -- as judged by
+/// [`is_valid_successor`] with `commits_since = 1`; e.g. `1.3.0` after tag
+/// `v1.2.3`. Derivation then targets the hinted version instead of a blind
+/// patch bump: tag `v0.1.0`, 3 commits, hint `0.2.0` becomes
+/// `0.2.0-dev.3+g87af40b`, not `0.1.1-dev.3+g87af40b`, so the version matches
+/// what the manifest will declare at the next release.
+///
+/// The hint is ignored -- and the tag-based rules of [`derive`] apply -- when:
+///
+/// - `commits_since == 0`: the commit *is* the tag, so the tagged version
+///   wins even if the working tree already carries the next version;
+/// - the tag is itself a prerelease (mid-RC, successor rules don't apply);
+/// - the hint is not a legal single-step successor (manifest not bumped yet,
+///   skipped versions, regressions). An unusable hint silently falls back to
+///   the patch bump; flagging it is [`is_valid_successor`] / `check`'s job,
+///   not derivation's.
+///
+/// # Examples
+///
+/// ```
+/// # use semvertag_core::{Describe, derive_with_hint};
+/// # use semver::Version;
+/// let d = Describe { tag: "v0.1.0".into(), commits_since: 3, hash: "87af40b".into(), dirty: false };
+/// let hint = Version::parse("0.2.0").unwrap();
+/// assert_eq!(derive_with_hint(&d, Some(&hint)).unwrap().to_string(), "0.2.0-dev.3+g87af40b");
+/// ```
+///
+/// A hint that is not a legal bump (here: the manifest not bumped yet) falls
+/// back to the patch-bump rules:
+///
+/// ```
+/// # use semvertag_core::{Describe, derive_with_hint};
+/// # use semver::Version;
+/// let d = Describe { tag: "v1.2.3".into(), commits_since: 7, hash: "abc1234".into(), dirty: false };
+/// let stale = Version::parse("1.2.3").unwrap();
+/// assert_eq!(derive_with_hint(&d, Some(&stale)).unwrap().to_string(), "1.2.4-dev.7+gabc1234");
+/// ```
+pub fn derive_with_hint(
+    describe: &Describe,
+    hint: Option<&Version>,
+) -> Result<Version, DeriveError> {
     let mut version =
         parse_tag_version(&describe.tag).map_err(|source| DeriveError::UnparseableTag {
             tag: describe.tag.clone(),
@@ -144,9 +204,28 @@ pub fn derive(describe: &Describe) -> Result<Version, DeriveError> {
         return Ok(version);
     }
 
-    // commits_since > 0
+    // commits_since > 0: target the manifest's declared version when it is a
+    // legal single-step successor of the tag (patch+1, minor+1 with patch=0,
+    // or major+1 with minor=patch=0). The developer's bump in Cargo.toml thus
+    // drives the derivation; anything else (no hint, manifest not bumped yet,
+    // illegal gap) falls back to the tag-based rules below. `is_valid_successor`
+    // also rejects prerelease hints (candidate.pre must be empty) and returns
+    // `LatestIsPrerelease` for prerelease tags, so the hint never overrides
+    // the prerelease-chaining rule.
+    let mut hinted = false;
+    if let Some(h) = hint {
+        if is_valid_successor(&version, h, 1).is_ok() {
+            version = h.clone();
+            hinted = true;
+        }
+    }
+
     if version.pre.is_empty() {
-        version.patch += 1;
+        // A hinted base is already the next release version -- only the
+        // tag-derived fallback needs the blind patch bump.
+        if !hinted {
+            version.patch += 1;
+        }
         version.pre = Prerelease::new(&format!("dev.{}", describe.commits_since))
             .expect("dev.{u64} is always a valid prerelease");
     } else {
@@ -303,10 +382,18 @@ impl fmt::Display for SuccessorError {
                 )
             }
             SuccessorError::TagManifestMismatch { latest, candidate } => {
+                // The common cause of this error is starting the next release
+                // cycle, so list the three legal next-release versions rather
+                // than just stating the equality rule.
+                let patch =
+                    Version::new(latest.major, latest.minor, latest.patch.saturating_add(1));
+                let minor = Version::new(latest.major, latest.minor.saturating_add(1), 0);
+                let major = Version::new(latest.major.saturating_add(1), 0, 0);
                 write!(
                     f,
                     "HEAD is the tagged release commit for {latest}, but Cargo.toml says \
-                     {candidate} -- the manifest version must equal the tag at the release commit"
+                     {candidate} -- valid Cargo.toml versions for next release:\n  \
+                     patch: {patch}\n  minor: {minor}\n  major: {major}"
                 )
             }
             SuccessorError::IllegalGap { latest, candidate } => {
@@ -551,6 +638,129 @@ mod tests {
         assert!(a < b, "{a} should sort before {b}");
     }
 
+    // --------------------------------------------- derive_with_hint (§5) ----
+
+    #[test]
+    fn hint_minor_bump_targets_manifest_version() {
+        // sec. 5 step 3: a legal manifest hint replaces the blind patch bump;
+        // 0.x minor bumps are honored like any other (consistent with the 0.x
+        // not-special-cased stance: the hint, not the crate, decides the bump).
+        let hint = v(0, 2, 0);
+        assert_eq!(
+            derive_with_hint(&describe("0.1.0", 3, "87af40b", false), Some(&hint))
+                .unwrap()
+                .to_string(),
+            "0.2.0-dev.3+g87af40b"
+        );
+    }
+
+    #[test]
+    fn hint_patch_and_major_bumps() {
+        let patch = v(1, 2, 4);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 1, "87af40b", false), Some(&patch))
+                .unwrap()
+                .to_string(),
+            "1.2.4-dev.1+g87af40b"
+        );
+        let major = v(2, 0, 0);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 5, "87af40b", false), Some(&major))
+                .unwrap()
+                .to_string(),
+            "2.0.0-dev.5+g87af40b"
+        );
+    }
+
+    #[test]
+    fn hint_propagates_dirty_into_build_metadata() {
+        let hint = v(0, 2, 0);
+        assert_eq!(
+            derive_with_hint(&describe("0.1.0", 3, "87af40b", true), Some(&hint))
+                .unwrap()
+                .to_string(),
+            "0.2.0-dev.3+g87af40b.dirty"
+        );
+    }
+
+    #[test]
+    fn hint_ignored_at_tag_commit() {
+        // The commit *is* the tag: the hinted next version must not leak out
+        // of a commit whose version is the released one -- clean or dirty.
+        let hint = v(1, 3, 0);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 0, "87af40b", false), Some(&hint))
+                .unwrap()
+                .to_string(),
+            "1.2.3"
+        );
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 0, "87af40b", true), Some(&hint))
+                .unwrap()
+                .to_string(),
+            "1.2.3+dirty"
+        );
+    }
+
+    #[test]
+    fn hint_equals_tag_falls_back_to_patch_bump() {
+        // Manifest not bumped yet: equality is not a successor, so derive
+        // keeps the blind patch bump.
+        let stale = v(1, 2, 3);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 7, "abc1234", false), Some(&stale))
+                .unwrap()
+                .to_string(),
+            "1.2.4-dev.7+gabc1234"
+        );
+    }
+
+    #[test]
+    fn hint_illegal_gap_falls_back_to_patch_bump() {
+        // Skipped versions and other illegal bumps are `check`'s business, not
+        // derivation's: the derived version stays monotone and orderable.
+        let skipped = v(1, 2, 5);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 7, "abc1234", false), Some(&skipped))
+                .unwrap()
+                .to_string(),
+            "1.2.4-dev.7+gabc1234"
+        );
+        let minor_not_reset = v(1, 3, 1);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 7, "abc1234", false), Some(&minor_not_reset))
+                .unwrap()
+                .to_string(),
+            "1.2.4-dev.7+gabc1234"
+        );
+        let behind = v(1, 2, 2);
+        assert_eq!(
+            derive_with_hint(&describe("1.2.3", 7, "abc1234", false), Some(&behind))
+                .unwrap()
+                .to_string(),
+            "1.2.4-dev.7+gabc1234"
+        );
+    }
+
+    #[test]
+    fn hint_ignored_for_prerelease_tags() {
+        // Mid-RC, successor rules don't apply: the hint never overrides the
+        // prerelease-chaining rule, even when it names the eventual release.
+        let release = v(1, 0, 0);
+        assert_eq!(
+            derive_with_hint(&describe("1.0.0-rc.1", 3, "87af40b", false), Some(&release))
+                .unwrap()
+                .to_string(),
+            "1.0.0-rc.1.dev.3+g87af40b"
+        );
+    }
+
+    #[test]
+    fn derive_is_derive_with_hint_without_hint() {
+        let d = describe("1.0.0", 5, "87af40b", true);
+        assert_eq!(derive(&d).unwrap(), derive_with_hint(&d, None).unwrap());
+    }
+
     #[test]
     fn huge_commit_count_no_overflow() {
         let v = derive(&describe("1.0.0", 99_999_999, "87af40b", false)).unwrap();
@@ -696,6 +906,25 @@ mod tests {
             matches!(err, SuccessorError::TagManifestMismatch { .. }),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn tag_manifest_mismatch_message_lists_legal_bumps() {
+        // The error should name the concrete legal next-release versions, not
+        // just state the equality rule.
+        let err = is_valid_successor(&v(0, 2, 1), &v(1, 2, 1), 0).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("HEAD is the tagged release commit for 0.2.1, but Cargo.toml says 1.2.1"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("-- valid Cargo.toml versions for next release:"),
+            "{msg}"
+        );
+        for line in ["patch: 0.2.2", "minor: 0.3.0", "major: 1.0.0"] {
+            assert!(msg.contains(line), "missing {line:?} in:\n{msg}");
+        }
     }
 
     #[test]

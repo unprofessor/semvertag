@@ -1,6 +1,6 @@
 [package]
 name = "cargo-semvertag"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.74"
 description = "cargo-semvertag: print the git-derived SemVer version, or validate Cargo.toml against the latest tag"
