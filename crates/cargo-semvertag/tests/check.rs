@@ -71,6 +71,29 @@ edition = "2021"
     std::fs::write(path, content).unwrap();
 }
 
+/// Workspace root whose `[workspace.package].version` is the single source of
+/// truth; `members/member` inherits it via `version.workspace = true`.
+fn write_workspace_repo(repo: &Path, version: &str) {
+    let root = format!(
+        r#"[workspace]
+members = ["members/member"]
+
+[workspace.package]
+version = "{version}"
+"#
+    );
+    std::fs::create_dir_all(repo.join("members/member")).unwrap();
+    std::fs::write(repo.join("Cargo.toml"), root).unwrap();
+    std::fs::write(
+        repo.join("members/member/Cargo.toml"),
+        r#"[package]
+name = "member"
+version.workspace = true
+"#,
+    )
+    .unwrap();
+}
+
 fn check_in(repo: &Path) -> AssertCommand {
     let mut cmd = AssertCommand::cargo_bin("cargo-semvertag").unwrap();
     cmd.arg("check");
@@ -509,6 +532,49 @@ fn derive_uncommitted_bump_at_tag_still_prints_tag() {
         .assert()
         .success()
         .stdout(predicates::str::starts_with("1.2.3+dirty"));
+}
+
+#[test]
+fn derive_resolves_workspace_inherited_version_from_member_dir() {
+    // version.workspace = true: the hint must resolve through the workspace
+    // root even when running inside the member directory, and without
+    // emitting the "no workspace root found" fallback warning.
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_workspace_repo(&repo, "0.1.0");
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v0.1.0", "-m", "release"]);
+    // Bump the single source of truth at the workspace root.
+    write_workspace_repo(&repo, "0.2.0");
+    commit(&repo, "bump workspace version");
+
+    let mut cmd = AssertCommand::cargo_bin("cargo-semvertag").unwrap();
+    cmd.current_dir(repo.join("members/member"));
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::starts_with("0.2.0-dev.1+g"))
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
+fn check_uncommitted_workspace_bump_from_member_dir_is_ok() {
+    // Inherited versions resolve through the workspace root both in the
+    // working tree and at HEAD: bumping the root's [workspace.package]
+    // version, uncommitted, then checking from inside the member is a legal
+    // next-cycle bump.
+    skip_if_no_git!();
+    let (_dir, repo) = fresh_repo();
+    write_workspace_repo(&repo, "0.1.0");
+    commit(&repo, "initial");
+    run_git(&repo, &["tag", "-a", "v0.1.0", "-m", "release"]);
+    // Uncommitted bump at the tagged release commit.
+    write_workspace_repo(&repo, "0.2.0");
+
+    let mut cmd = AssertCommand::cargo_bin("cargo-semvertag").unwrap();
+    cmd.arg("check").current_dir(repo.join("members/member"));
+    cmd.assert().success().stdout(predicates::str::contains(
+        "ok: Cargo.toml version 0.2.0 is a legal successor to tag 0.1.0",
+    ));
 }
 
 #[test]

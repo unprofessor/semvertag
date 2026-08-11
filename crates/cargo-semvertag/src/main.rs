@@ -210,10 +210,27 @@ fn parse_tag_version(tag: &str) -> Result<Version, semver::Error> {
 /// Read `package.version` from a Cargo.toml file, resolving workspace
 /// inheritance (`version.workspace = true`) by walking up to the workspace
 /// root's `[workspace.package].version`.
+///
+/// The manifest path is canonicalized first: the ancestor walk must be able
+/// to climb above the current directory, which a relative parent like `.` or
+/// an empty path cannot -- running inside a workspace member with a bare
+/// `Cargo.toml` is the common case, and its workspace root may be several
+/// levels up.
 fn read_package_version(path: &Path) -> Result<Version, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
-    let manifest_dir = path.parent().unwrap_or(Path::new("."));
-    version_from_manifest(&content, manifest_dir, &|dir| {
+    // The file exists (we just read it), so canonicalization cannot fail for
+    // a reason other than I/O; fall back to the raw parent on error.
+    let manifest_dir = path
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| {
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+                .to_path_buf()
+        });
+    version_from_manifest(&content, &manifest_dir, &|dir| {
         std::fs::read_to_string(dir.join("Cargo.toml")).ok()
     })
 }
