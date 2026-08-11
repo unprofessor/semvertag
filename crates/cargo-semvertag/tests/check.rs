@@ -637,11 +637,9 @@ fn check_foreign_manifest_uses_its_repos_tags() {
     cmd.args(["check", "--manifest-path"])
         .arg(repo_b.join("Cargo.toml"))
         .current_dir(&repo_a);
-    cmd.assert()
-        .success()
-        .stdout(predicates::str::contains(
-            "ok: Cargo.toml version 1.2.3 is a legal successor to tag 1.2.3",
-        ));
+    cmd.assert().success().stdout(predicates::str::contains(
+        "ok: Cargo.toml version 1.2.3 is a legal successor to tag 1.2.3",
+    ));
 }
 
 #[test]

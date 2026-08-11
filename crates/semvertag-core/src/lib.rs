@@ -728,9 +728,12 @@ mod tests {
         );
         let minor_not_reset = v(1, 3, 1);
         assert_eq!(
-            derive_with_hint(&describe("1.2.3", 7, "abc1234", false), Some(&minor_not_reset))
-                .unwrap()
-                .to_string(),
+            derive_with_hint(
+                &describe("1.2.3", 7, "abc1234", false),
+                Some(&minor_not_reset)
+            )
+            .unwrap()
+            .to_string(),
             "1.2.4-dev.7+gabc1234"
         );
         let behind = v(1, 2, 2);
