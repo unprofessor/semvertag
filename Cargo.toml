@@ -5,3 +5,18 @@ members = [
   "crates/cargo-semvertag",
 ]
 resolver = "2"
+
+# Single source of truth for everything the crates share; members inherit via
+# `*.workspace = true`. Bumping the repo's version is one line, here.
+[workspace.package]
+version = "0.2.2"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/unprofessor/semvertag"
+
+# Internal crates publish in dependency order (see .github/workflows/ci.yml),
+# so their versions live here too instead of in each dependent's manifest.
+[workspace.dependencies]
+semvertag-core = { path = "crates/semvertag-core", version = "0.2.2" }
+semvertag-shell = { path = "crates/semvertag-shell", version = "0.2.2" }
