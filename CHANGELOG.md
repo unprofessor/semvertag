@@ -5,7 +5,9 @@ All notable changes to this project are documented here. The format follows
 [semver](https://semver.org/) and correspond one-to-one with git tags
 (`v0.2.1` == crate version `0.2.1`).
 
-## [Unreleased] (0.2.2)
+## [Unreleased]
+
+## [0.2.2] - 2026-08-11
 
 ### Added
 
@@ -74,7 +76,8 @@ All notable changes to this project are documented here. The format follows
 - SPEC, READMEs, dual license (MIT OR Apache-2.0).
 - CI: fmt, clippy, test.
 
-[Unreleased]: https://github.com/unprofessor/semvertag/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/unprofessor/semvertag/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/unprofessor/semvertag/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/unprofessor/semvertag/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/unprofessor/semvertag/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/unprofessor/semvertag/compare/cc42dbe...v0.1.0
