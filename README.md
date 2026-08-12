@@ -206,4 +206,4 @@ The most common real-world failure: CI checks out with `fetch-depth: 1`, `git de
 
 ## License
 
-MIT OR Apache-2.0, at your option.
+MIT OR Apache-2.0, at your option. See [CHANGELOG.md](./CHANGELOG.md) for the release history.
