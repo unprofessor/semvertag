@@ -7,6 +7,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-13
+
+### Added
+
+- `describe_with_hint` / `describe_in_with_hint` functions in
+  `semvertag-shell` that accept an optional manifest version hint,
+  making shell-adapter derivation consistent with `cargo-semvertag`
+  (which reads `Cargo.toml`'s `package.version`). A developer bump to
+  e.g. `0.2.0` after tag `v0.1.0` now yields `0.2.0-dev.N` from either
+  entry point.
+
+### Changed
+
+- `cargo-semvertag derive` now delegates to
+  `semvertag_shell::describe_in_with_hint` instead of manually chaining
+  `describe_raw` + `derive_with_hint`.
+- Shared `git describe` invocation extracted into a private
+  `git_describe_raw` helper; no behavioural change.
+
 ## [0.2.2] - 2026-08-11
 
 ### Added
@@ -76,7 +95,8 @@ All notable changes to this project are documented here. The format follows
 - SPEC, READMEs, dual license (MIT OR Apache-2.0).
 - CI: fmt, clippy, test.
 
-[Unreleased]: https://github.com/unprofessor/semvertag/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/unprofessor/semvertag/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/unprofessor/semvertag/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/unprofessor/semvertag/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/unprofessor/semvertag/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/unprofessor/semvertag/compare/v0.1.0...v0.2.0

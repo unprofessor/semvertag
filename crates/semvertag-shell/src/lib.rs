@@ -29,7 +29,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use semvertag_core::{derive, parse_describe_string, DeriveError, Describe};
+use semvertag_core::{derive, derive_with_hint, parse_describe_string, DeriveError, Describe};
 
 /// Re-exported so callers don't need a direct `semver` dependency to name the
 /// return type of [`describe`] / [`describe_in`].
@@ -92,9 +92,24 @@ pub const VERSION: &str = env!("SEMVERTAG_VERSION");
 /// Run `git describe` in the current working directory and derive a
 /// [`semver::Version`] from its output.
 ///
-/// Equivalent to [`describe_in`] with `.` as the repo path.
+/// Equivalent to [`describe_in`] with `.` as the repo path. To influence
+/// derivation with a manifest version hint, use [`describe_with_hint`].
 pub fn describe() -> Result<semver::Version, ShellError> {
     describe_in(Path::new("."))
+}
+
+/// Run `git describe` in the current working directory and derive a
+/// [`semver::Version`], accepting an optional version hint.
+///
+/// When `hint` is [`Some`] and is a legal single-step successor of the
+/// latest tag (as judged by [`semvertag_core::is_valid_successor`]), the
+/// derivation targets the hinted version instead of the blind patch bump.
+/// Typical usage: pass the project's `Cargo.toml` `package.version` so a
+/// developer-performed minor/major bump is reflected in the derived version.
+///
+/// See [`semvertag_core::derive_with_hint`] for the full derivation rules.
+pub fn describe_with_hint(hint: Option<&Version>) -> Result<semver::Version, ShellError> {
+    describe_in_with_hint(Path::new("."), hint)
 }
 
 /// Run `git describe` in `repo` and derive a [`semver::Version`] from its
@@ -103,34 +118,41 @@ pub fn describe() -> Result<semver::Version, ShellError> {
 /// `repo` is passed to `git -C <repo>`. Detects a shallow clone (a
 /// `.git/shallow` file under `repo`) and returns [`ShellError::ShallowClone`]
 /// before invoking git.
+///
+/// To influence derivation with a manifest version hint, see
+/// [`describe_in_with_hint`].
 pub fn describe_in(repo: &Path) -> Result<semver::Version, ShellError> {
-    if is_shallow(repo) {
-        return Err(ShellError::ShallowClone);
-    }
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["describe", "--tags", "--long", "--always", "--dirty=.dirty"])
-        .output()
-        .map_err(|_| ShellError::GitUnavailable)?;
-
-    if !output.status.success() {
-        return Err(ShellError::GitDescribeFailed {
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let describe = parse_describe_string(&raw).map_err(ShellError::from)?;
-    let version = derive(&describe).map_err(ShellError::from)?;
-    Ok(version)
+    let describe = describe_raw(repo)?;
+    derive(&describe).map_err(ShellError::from)
 }
 
-/// Like [`describe_in`] but returns the parsed [`Describe`] without deriving the
-/// final version -- useful when a caller wants to inspect the commit count or
-/// hash, or apply a custom derivation.
+/// Run `git describe` in `repo` and derive a [`semver::Version`], accepting
+/// an optional version hint.
+///
+/// When `hint` is [`Some`] and is a legal single-step successor of the
+/// latest tag, the derivation targets the hinted version (e.g. a `0.2.0`
+/// manifest after tag `v0.1.0` yields `0.2.0-dev.N` instead of
+/// `0.1.1-dev.N`). A missing, stale, or illegal hint silently falls back to
+/// the tag-based rules — judging the hint is the caller's responsibility
+/// (see [`semvertag_core::is_valid_successor`]).
+pub fn describe_in_with_hint(
+    repo: &Path,
+    hint: Option<&Version>,
+) -> Result<semver::Version, ShellError> {
+    let describe = describe_raw(repo)?;
+    derive_with_hint(&describe, hint).map_err(ShellError::from)
+}
+
+/// Run `git describe` in `repo` and return the parsed [`Describe`] without
+/// deriving the final version -- useful when a caller wants to inspect the
+/// commit count or hash, or apply a custom derivation.
 pub fn describe_raw(repo: &Path) -> Result<Describe, ShellError> {
+    let raw = git_describe_raw(repo)?;
+    parse_describe_string(&raw).map_err(ShellError::from)
+}
+
+/// Execute `git describe` in `repo` and return the raw stdout string.
+fn git_describe_raw(repo: &Path) -> Result<String, ShellError> {
     if is_shallow(repo) {
         return Err(ShellError::ShallowClone);
     }
@@ -148,8 +170,7 @@ pub fn describe_raw(repo: &Path) -> Result<Describe, ShellError> {
         });
     }
 
-    let raw = String::from_utf8_lossy(&output.stdout);
-    parse_describe_string(&raw).map_err(ShellError::from)
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Best-effort shallow-clone check: look for `.git/shallow` under `repo`.
@@ -376,5 +397,109 @@ mod tests {
         let v = describe_in(&repo).unwrap();
         assert!(matches!(v.major, 1));
         assert_eq!(v.pre.as_str(), "");
+    }
+
+    // ----------------------------------------- describe_in_with_hint ----
+
+    #[test]
+    fn hint_minor_bump_targets_hint() {
+        if !git_available() {
+            return;
+        }
+        let (_dir, repo) = fresh_repo();
+        commit(&repo, "initial");
+        run_git(&repo, &["tag", "-a", "v0.1.0", "-m", "release"]);
+        commit(&repo, "two");
+        commit(&repo, "three");
+        commit(&repo, "four");
+        let hint = Version::new(0, 2, 0);
+        let v = describe_in_with_hint(&repo, Some(&hint)).unwrap();
+        let expected = format!("0.2.0-dev.3+g{}", head_short_hash(&repo));
+        assert_eq!(v.to_string(), expected);
+    }
+
+    #[test]
+    fn hint_major_bump_targets_hint() {
+        if !git_available() {
+            return;
+        }
+        let (_dir, repo) = fresh_repo();
+        commit(&repo, "initial");
+        run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+        commit(&repo, "two");
+        commit(&repo, "three");
+        commit(&repo, "four");
+        commit(&repo, "five");
+        commit(&repo, "six");
+        let hint = Version::new(2, 0, 0);
+        let v = describe_in_with_hint(&repo, Some(&hint)).unwrap();
+        let expected = format!("2.0.0-dev.5+g{}", head_short_hash(&repo));
+        assert_eq!(v.to_string(), expected);
+    }
+
+    #[test]
+    fn hint_stale_falls_back_to_patch() {
+        // Manifest not bumped yet: hint equals tag, falls back to blind patch.
+        if !git_available() {
+            return;
+        }
+        let (_dir, repo) = fresh_repo();
+        commit(&repo, "initial");
+        run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+        commit(&repo, "two");
+        commit(&repo, "three");
+        let hint = Version::new(1, 2, 3);
+        let v = describe_in_with_hint(&repo, Some(&hint)).unwrap();
+        let expected = format!("1.2.4-dev.2+g{}", head_short_hash(&repo));
+        assert_eq!(v.to_string(), expected);
+    }
+
+    #[test]
+    fn hint_ignored_at_tag_commit() {
+        // The tag wins at the tag commit even with a bumped hint.
+        if !git_available() {
+            return;
+        }
+        let (_dir, repo) = fresh_repo();
+        commit(&repo, "initial");
+        run_git(&repo, &["tag", "-a", "v1.2.3", "-m", "release"]);
+        let hint = Version::new(1, 3, 0);
+        let v = describe_in_with_hint(&repo, Some(&hint)).unwrap();
+        assert_eq!(v.to_string(), "1.2.3");
+    }
+
+    #[test]
+    fn hint_none_equals_describe_in() {
+        if !git_available() {
+            return;
+        }
+        let (_dir, repo) = fresh_repo();
+        commit(&repo, "initial");
+        run_git(&repo, &["tag", "-a", "v1.0.0", "-m", "release"]);
+        commit(&repo, "two");
+        commit(&repo, "three");
+        let without = describe_in(&repo).unwrap();
+        let with_none = describe_in_with_hint(&repo, None).unwrap();
+        assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn describe_with_hint_targets_minor_bump() {
+        if !git_available() {
+            return;
+        }
+        let (_dir, repo) = fresh_repo();
+        commit(&repo, "initial");
+        run_git(&repo, &["tag", "-a", "v0.1.0", "-m", "release"]);
+        commit(&repo, "two");
+        commit(&repo, "three");
+        let hint = Version::new(0, 2, 0);
+        // describe_with_hint uses cwd; chdir into the repo.
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&repo).unwrap();
+        let v = describe_with_hint(Some(&hint)).unwrap();
+        std::env::set_current_dir(&orig).unwrap();
+        let expected = format!("0.2.0-dev.2+g{}", head_short_hash(&repo));
+        assert_eq!(v.to_string(), expected);
     }
 }

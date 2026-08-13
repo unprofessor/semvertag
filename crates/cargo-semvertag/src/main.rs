@@ -44,8 +44,8 @@ use std::process::{Command as ProcessCommand, ExitCode};
 
 use clap::{Parser, Subcommand};
 use semver::Version;
-use semvertag_core::{derive_with_hint, is_valid_successor, SuccessorError};
-use semvertag_shell::describe_raw;
+use semvertag_core::{is_valid_successor, SuccessorError};
+use semvertag_shell::{describe_in_with_hint, describe_raw};
 
 #[derive(Parser)]
 #[command(
@@ -111,6 +111,11 @@ fn run() -> Result<(), AppError> {
 }
 
 /// Print the version derived from `git describe` (SPEC sec. 5).
+///
+/// Reads the manifest's `package.version` as a derivation hint so a
+/// developer-performed bump (e.g. `0.2.0` after tag `v0.1.0`) is reflected
+/// in the derived version (`0.2.0-dev.N` instead of `0.1.1-dev.N`).
+/// Absent or unusable, falls back to the tag-based rules.
 fn print_derived_version(manifest_path: Option<PathBuf>) -> Result<(), AppError> {
     // Probe git at the manifest's repository root when one is given, the
     // cwd's repository root otherwise -- see `probe_dir`.
@@ -118,14 +123,9 @@ fn print_derived_version(manifest_path: Option<PathBuf>) -> Result<(), AppError>
         .as_deref()
         .map(manifest_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    let describe = describe_raw(&probe_dir(&anchor))
-        .map_err(|e| AppError::Other(format!("could not read git state: {e}")))?;
-    // The manifest's package.version hints the declared next release; when it
-    // is a legal successor of the tag, derivation targets it (a minor bump in
-    // Cargo.toml yields 0.2.0-dev.N instead of 0.1.1-dev.N). Absent or
-    // unusable, it falls back to the tag-based rules.
+    let repo = probe_dir(&anchor);
     let hint = read_version_hint(manifest_path);
-    let version = derive_with_hint(&describe, hint.as_ref())
+    let version = describe_in_with_hint(&repo, hint.as_ref())
         .map_err(|e| AppError::Other(format!("could not derive version: {e}")))?;
     println!("{version}");
     Ok(())
